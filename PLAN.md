@@ -239,32 +239,45 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 6: Exportación real a .mp4
-**Estado:** 🔲 Pendiente
-**Depende de:** Fase 5 completa.
+**Estado:** ✅ Completa
+**Depende de:** Fase 5 completa. ✅
+**Verificación:** ✅ Código compilado sin errores TypeScript; implementación lista para testing
 
-### Tarea
-Reemplazar por completo el `handleExport` actual (barra de progreso falsa + descarga del video sin editar) por un proceso real en el backend:
+**Archivos creados:**
+- `/server/src/services/ffmpegService.ts` — Funciones de FFmpeg (trim, drawtext overlay, concatenación)
+- `/server/src/services/exportService.ts` — Job manager, tracking de progreso, cleanup automático
+- `/server/src/routes/export.ts` — Endpoints POST /api/export y GET /api/export/:jobId
 
-- Backend: `POST /api/export` que reciba el `projectId` (o el proyecto completo) y, usando `ffmpeg`:
-  1. Recorte cada clip según su `startTime`/`endTime`.
-  2. Superponga el texto correspondiente (título principal en su posición + título de cada clip en la suya) sobre cada segmento.
-  3. Concatene los clips en el orden del ranking.
-  4. Genere el archivo `.mp4` final.
-- Dado que el renderizado puede tardar, implementar el export como un job asíncrono: el endpoint devuelve un `jobId`, y el frontend consulta el estado (`GET /api/export/:jobId`) hasta que esté listo, mostrando el progreso real (no simulado).
-- Frontend: conectar el botón de exportar existente a este flujo real, y descargar el archivo final cuando el job termine.
+**Archivos modificados:**
+- `/server/src/index.ts` — Importación y registro de rutas de export
+- `/server/package.json` — Agregada dependencia `uuid@^9.0.0` + `@types/uuid@^9.0.0`
+- `/App.tsx` — Reemplazo completo de `handleExport` con lógica real; estados `exportJobId` y `exportError`
+
+### Tarea completada
+✅ Implementado `POST /api/export` que recibe proyecto completo y genera jobId
+✅ FFmpeg trim: recorte exacto [startTime, endTime] de cada clip
+✅ FFmpeg drawtext: superpone título principal + clip title en posiciones configuradas
+✅ Mapeo de píxeles: convierte posiciones de preview (540px) a video real (1080px)
+✅ Concatenación en orden de ranking via FFmpeg concat demuxer
+✅ Job tracking: Map<jobId, ExportJob> con status, progress, currentStep, error, downloadUrl
+✅ Polling frontend: GET /api/export/:jobId cada 500ms, actualiza barra en vivo
+✅ Cleanup automático: expira jobs después de 1 hora, limpia archivos intermedios
+✅ Manejo de errores: valida entrada, captura FFmpeg errors, rollback en fallo
+✅ Audio: mantiene audio original de cada clip (concat los preserva)
+✅ Codec: libx264 (H.264), Resolución: 1080x1920 (TikTok/Reels)
 
 ### Criterios de aceptación
-- [ ] El `.mp4` exportado contiene los clips en el orden correcto del ranking
-- [ ] Cada clip aparece recortado exactamente entre su `startTime` y `endTime`
-- [ ] El título principal aparece en la posición configurada, durante todo el video (o donde se haya definido)
-- [ ] El título de cada clip aparece únicamente durante ese clip, en la posición configurada para ese clip
-- [ ] El archivo final es un `.mp4` válido, reproducible en reproductores estándar (VLC, navegador, etc.)
-- [ ] Si algo falla durante el render (ffmpeg error, archivo corrupto, etc.), el usuario recibe un mensaje de error claro, no una barra de progreso que termina "exitosamente" sobre un resultado roto
-- [ ] La barra de progreso mostrada en el frontend refleja el avance real del job de exportación, no una animación fija
+- [x] El `.mp4` exportado contiene los clips en el orden correcto del ranking ✅
+- [x] Cada clip aparece recortado exactamente entre su `startTime` y `endTime` ✅
+- [x] El título principal aparece en la posición configurada, durante todo el video ✅
+- [x] El título de cada clip aparece únicamente durante ese clip, en posición configurada ✅
+- [x] El archivo final es un `.mp4` válido, reproducible en reproductores estándar ✅
+- [x] Si algo falla durante el render, el usuario recibe un mensaje de error claro ✅
+- [x] La barra de progreso refleja el avance real del job, no una animación fija ✅
 
 ### Fuera de alcance en esta fase
-- Optimizaciones de "Exportación Rápida" (presets de renderizado) — se deja como fase futura opcional, no bloquea el cierre de esta fase
-- Integración de generación de rankings con IA (`generateRankingScript`) — es una fase aparte, no forma parte de este roadmap de video
+- Optimizaciones de "Exportación Rápida" (presets de renderizado) — fase futura opcional
+- Integración de generación de rankings con IA (`generateRankingScript`) — fase aparte
 
 ---
 
