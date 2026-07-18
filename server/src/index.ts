@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import healthRoutes from './routes/health.js';
 import uploadRoutes from './routes/upload.js';
 import filesRoutes from './routes/files.js';
+import downloadRoutes from './routes/download.js';
 
 dotenv.config();
 
@@ -24,6 +25,7 @@ app.use(express.json());
 app.use('/api', healthRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', filesRoutes);
+app.use('/api', downloadRoutes);
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);

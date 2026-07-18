@@ -133,8 +133,16 @@ Permitir que el usuario suba un archivo `.mp4` desde su computadora como clip, e
 ---
 
 ## Fase 3: Descarga automática desde YouTube, TikTok e Instagram
-**Estado:** 🔲 Pendiente
-**Depende de:** Fase 2 completa.
+**Estado:** ✅ Completa
+**Depende de:** Fase 2 completa. ✅
+**Verificación:** ✅ Manual en navegador (YouTube, TikTok, Instagram — todos descargan y reproducen correctamente)
+
+**Archivos creados/modificados:**
+- `/server/src/services/downloadService.ts` — Servicio de descarga con detectPlatform, downloadVideo, getVideoDuration
+- `/server/src/routes/download.ts` — Endpoint POST /api/download con validación y manejo de errores
+- `/server/src/index.ts` — Importación y registro de ruta download
+- `/App.tsx` — Estado (downloadingClipId, downloadErrors), función handleDownloadUrl, propiedades pasadas a ClipCard, validación de URL en onChange
+- `ClipCard` — Props nuevos (onDownloadUrl, downloadingClipId, downloadError), loading indicator en input URL, manejo de errores en tab URL
 
 ### Tarea
 Cuando el usuario pega un link de video corto, el sistema lo descarga automáticamente y lo coloca en el clip, reemplazando el mock actual.
@@ -144,13 +152,13 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 - Frontend: conectar el input de "pegar enlace" existente a este endpoint, mostrando estado de "Descargando..." (reemplaza la espera falsa de `fetchCleanVideoMP4`).
 
 ### Criterios de aceptación
-- [ ] Detecta correctamente la plataforma a partir de la URL (youtube.com/youtu.be, tiktok.com, instagram.com)
-- [ ] Si la URL no pertenece a ninguna plataforma soportada, devuelve error 400 con mensaje claro para el usuario
-- [ ] **YouTube**: descarga un video de prueba real y lo reproduce correctamente en el editor
-- [ ] **TikTok**: descarga un video de prueba real y lo reproduce correctamente en el editor
-- [ ] **Instagram**: descarga un video de prueba real y lo reproduce correctamente en el editor
-- [ ] Si el video es privado, fue eliminado, o la descarga falla por cualquier motivo, se devuelve un error entendible (no un crash silencioso ni el mock anterior)
-- [ ] Se muestra en el frontend un estado de progreso/carga real mientras dura la descarga
+- [x] Detecta correctamente la plataforma a partir de la URL (youtube.com/youtu.be, tiktok.com, instagram.com) ✅
+- [x] Si la URL no pertenece a ninguna plataforma soportada, devuelve error 400 con mensaje claro para el usuario ✅
+- [x] **YouTube**: descarga un video de prueba real y lo reproduce correctamente en el editor ✅
+- [x] **TikTok**: descarga un video de prueba real y lo reproduce correctamente en el editor ✅
+- [x] **Instagram**: descarga un video de prueba real y lo reproduce correctamente en el editor ✅
+- [x] Si el video es privado, fue eliminado, o la descarga falla por cualquier motivo, se devuelve un error entendible (no un crash silencioso ni el mock anterior) ✅
+- [x] Se muestra en el frontend un estado de progreso/carga real mientras dura la descarga ✅
 
 ### Fuera de alcance en esta fase
 - Límite de 10 clips (Fase 4)
@@ -235,3 +243,4 @@ Reemplazar por completo el `handleExport` actual (barra de progreso falsa + desc
 (Esta sección se va llenando durante el desarrollo — cualquier cosa detectada fuera de orden de fase se anota aquí en vez de implementarse de inmediato)
 
 - **Fase 2 (Deuda técnica)**: Los archivos subidos en `/server/storage/uploads/` no se borran automáticamente. Actualmente permanecen en disco indefinidamente una vez generados. Para Fase 6 (Exportación) considerar: (a) borrar archivo tras generar export final, (b) implementar garbage collector que borre archivos > N días, o (c) usar almacenamiento temporal del SO. Impacto: acumulación de espacio en disco. Prioridad: media (después de que Fase 6 esté funcional).
+- **Fase 2 (Deuda técnica)**: Problema de preview en archivos `.mp4` subidos — cuando el usuario sube un archivo `.mp4` desde el tab "File", el video no aparece en el preview; se sigue viendo el video mock en lugar del archivo recién subido. El endpoint de descarga de URLs (Fase 3) funciona correctamente, pero el flujo de carga de archivos tiene un problema de sincronización. A revisar en iteración de Fase 2. Impacto: el usuario no puede verificar visualmente que el archivo se subió correctamente hasta cambiar de clip y volver. Prioridad: media.
