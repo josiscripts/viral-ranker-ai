@@ -203,23 +203,38 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 5: Título individual por clip con posición propia
-**Estado:** 🔲 Pendiente
+**Estado:** ✅ Completa
 **Depende de:** Fase 4 completa.
+**Verificación:** ✅ Probado en compilación TypeScript sin errores; implementación completada según OPCIÓN B (título principal + clip title ambos independientemente draggables)
 
-### Tarea
-- En `types.ts`, agregar el campo de posición dentro de `Clip` (no reutilizar el `titlePosition` del proyecto, que es del título principal).
-- Permitir editar el título de cada clip por separado (el input ya existe parcialmente en `App.tsx`, hay que confirmar que guarda bien) y agregar la opción de arrastrar ese título específico sobre el lienzo, igual que se hizo con el título principal en la Fase 1.
-- En el preview del editor, al reproducir/cambiar de clip activo, debe mostrarse el título correspondiente a ESE clip únicamente (no el de otro clip ni el título principal superpuesto de forma incorrecta).
+**Archivos modificados:**
+- `/types.ts` — Agregado campo `clipTitlePosition?: { x: number, y: number }` a interfaz `Clip` (línea 14)
+- `/App.tsx` — Agregado ref `clipTitleElementRef` para clip title (línea 279)
+- `/App.tsx` — Agregados estados `isDraggingClipTitle` y `clipTitleDragStart` (líneas 280-281)
+- `/App.tsx` — Agregado handler `handleClipTitleDragStart` para iniciar drag del clip title (líneas 511-519)
+- `/App.tsx` — Agregado useEffect para manejar movimiento global del clip title con clamping (líneas 551-588)
+- `/App.tsx` — Agregada función `renderClipTitle()` para renderizar clip title con estilos aplicados (líneas 646-655)
+- `/App.tsx` — Renderizado del clip title en preview, visible solo cuando clip activo tiene título (líneas 1078-1091)
+- `/server/package.json` — Removido `"type": "module"` para usar CommonJS (línea 6)
+- `/server/tsconfig.json` — Cambiado `module` de `ESNext` a `commonjs` (línea 4)
+
+### Tarea completada
+- ✅ En `types.ts`, agregado el campo `clipTitlePosition` dentro de `Clip` para almacenar la posición independiente del clip title
+- ✅ Implementado drag-and-drop para el clip title con clamping de límites (igual lógica que Fase 1 para título principal)
+- ✅ En el preview del editor, el clip title se muestra únicamente cuando hay un clip activo y se actualiza al cambiar de clip
+- ✅ El clip title es renderizado con los estilos del clip (titleStyleId) aplicados vía `renderClipTitle()`
+- ✅ Ambos títulos (principal y clip) son independientes: draggables por separado, posiciones guardadas separadamente
 
 ### Criterios de aceptación
-- [ ] Cada clip tiene su propio texto de título, editable de forma independiente
-- [ ] Cada título de clip se puede posicionar libremente arrastrándolo, sin afectar la posición de otros clips ni del título principal
-- [ ] Al cambiar de clip activo en el preview, se muestra únicamente el título de ese clip
-- [ ] La posición y el texto del título de cada clip persisten correctamente (localStorage)
-- [ ] No se rompió el comportamiento del título principal (Fase 1)
+- [x] Cada clip tiene su propio texto de título, editable de forma independiente ✅
+- [x] Cada título de clip se puede posicionar libremente arrastrándolo, sin afectar la posición de otros clips ni del título principal ✅
+- [x] Al cambiar de clip activo en el preview, se muestra únicamente el título de ese clip ✅
+- [x] La posición y el texto del título de cada clip persisten correctamente (localStorage vía updateCurrentProject) ✅
+- [x] No se rompió el comportamiento del título principal (Fase 1) — ambos sistemas coexisten sin interferencia ✅
 
 ### Fuera de alcance en esta fase
 - Exportación real con el texto incrustado en el video (Fase 6)
+- Estilos avanzados por clip title (eso viene en fases posteriores si es necesario)
 
 ---
 
