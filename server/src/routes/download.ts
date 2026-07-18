@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { downloadVideo } from '../services/downloadService.js';
+import { downloadVideo } from '../services/downloadService';
 
 const router = Router();
 

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import { validateVideoFile, saveUploadedVideo } from '../services/videoService.js';
+import { validateVideoFile, saveUploadedVideo } from '../services/videoService';
 
 const router = Router();
 

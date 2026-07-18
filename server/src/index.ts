@@ -1,10 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import healthRoutes from './routes/health.js';
-import uploadRoutes from './routes/upload.js';
-import filesRoutes from './routes/files.js';
-import downloadRoutes from './routes/download.js';
+import healthRoutes from './routes/health';
+import uploadRoutes from './routes/upload';
+import filesRoutes from './routes/files';
+import downloadRoutes from './routes/download';
 
 dotenv.config();
 

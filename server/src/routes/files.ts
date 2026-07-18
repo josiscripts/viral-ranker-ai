@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { getFileStats } from '../services/videoService.js';
+import { getFileStats } from '../services/videoService';
 
 const router = Router();
 

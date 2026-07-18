@@ -2,10 +2,9 @@
   "name": "viral-ranker-ai-server",
   "version": "1.0.0",
   "description": "Backend server for Viral Ranker AI",
-  "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --exec ts-node --esm src/index.ts",
+    "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
