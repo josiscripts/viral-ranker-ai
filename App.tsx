@@ -218,6 +218,7 @@ const App: React.FC = () => {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const titleElementRef = useRef<HTMLDivElement>(null);
 
   const t = translations[lang];
 
@@ -303,10 +304,26 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      if (isDragging && previewContainerRef.current) {
+      if (isDragging && previewContainerRef.current && titleElementRef.current) {
         const containerRect = previewContainerRef.current.getBoundingClientRect();
-        const x = e.clientX - containerRect.left - containerRect.width / 2 - dragOffset.x;
-        const y = e.clientY - containerRect.top - containerRect.height / 2 - dragOffset.y;
+        const titleRect = titleElementRef.current.getBoundingClientRect();
+
+        let x = e.clientX - containerRect.left - containerRect.width / 2 - dragOffset.x;
+        let y = e.clientY - containerRect.top - containerRect.height / 2 - dragOffset.y;
+
+        const titleWidth = titleRect.width;
+        const titleHeight = titleRect.height;
+        const containerWidth = containerRect.width;
+        const containerHeight = containerRect.height;
+
+        const maxX = containerWidth / 2 - titleWidth / 2;
+        const minX = -containerWidth / 2 + titleWidth / 2;
+        const maxY = containerHeight / 2 - titleHeight / 2;
+        const minY = -containerHeight / 2 + titleHeight / 2;
+
+        x = Math.max(minX, Math.min(maxX, x));
+        y = Math.max(minY, Math.min(maxY, y));
+
         updateCurrentProject({ titlePosition: { x, y } });
       }
     };
@@ -351,10 +368,11 @@ const App: React.FC = () => {
     ));
 
     return (
-      <div 
+      <div
+        ref={titleElementRef}
         onMouseDown={handleDragStart}
         className={`relative inline-block ${currentStyle.shadow} ${project.enableTitleDrag ? 'cursor-move active:scale-95' : 'pointer-events-auto'}`}
-        style={{ 
+        style={{
           transform: `translate(${project.titlePosition.x}px, ${project.titlePosition.y}px)`,
           zIndex: 60,
           transition: isDragging ? 'none' : 'transform 0.1s ease-out'
@@ -646,14 +664,18 @@ const App: React.FC = () => {
                   </div>
 
                   <div className={`border p-6 rounded-b-xl shadow-inner transition-all duration-500 overflow-hidden relative ${isDarkMode ? 'bg-[#0c0c0c] border-white/5' : 'bg-white border-gray-200'}`}>
-                    <textarea 
+                    <textarea
                       value={project.title}
                       onChange={(e) => updateCurrentProject({ title: e.target.value })}
+                      maxLength={32}
                       className={`w-full bg-transparent border-none text-3xl focus:ring-0 resize-none min-h-[160px] uppercase tracking-tighter transition-all duration-300 relative z-10 ${currentStyle.classes} ${currentStyle.shadow} ${isDarkMode ? 'placeholder:text-gray-800' : 'placeholder:text-gray-400'}`}
                       style={{ WebkitTextStroke: `${project.titleStroke}px ${strokeColor}`, lineHeight: '1.1' }}
                       placeholder={t.rankingTitlePlaceholder}
                     />
                     <div className={`absolute inset-0 p-6 pointer-events-none opacity-20 blur-[1px] text-3xl uppercase tracking-tighter ${currentStyle.classes}`} style={{ WebkitTextStroke: `${project.titleStroke + 1}px #000`, lineHeight: '1.1' }}>{project.title}</div>
+                    <div className={`text-right text-xs font-black tracking-widest mt-3 relative z-10 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>
+                      {project.title.length}/32
+                    </div>
                   </div>
                 </div>
 

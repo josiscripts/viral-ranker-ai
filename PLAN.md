@@ -66,8 +66,16 @@ Crear la estructura mínima de servidor sobre la que se apoyarán todas las fase
 ---
 
 ## Fase 1: Refinar posición libre del título principal
-**Estado:** 🔲 Pendiente
+**Estado:** ✅ Completa
 **Depende de:** Fase 0 completa.
+**Verificación:** ✅ Probado manualmente en desktop y mobile
+
+**Archivos modificados:**
+- `/App.tsx` — Ref `titleElementRef` para obtener dimensiones del título (línea 221)
+- `/App.tsx` — Adjunción del ref al div principal del título (línea 372)
+- `/App.tsx` — Clamping de límites en `handleGlobalMouseMove` (líneas 307-325)
+- `/App.tsx` — `maxLength={32}` en textarea del título (línea 670)
+- `/App.tsx` — Contador visual "X/32" (líneas 676-678)
 
 ### Tarea
 El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `handleDragStart` en `App.tsx`) ya existe parcialmente. Esta fase es de **verificación y hardening**, no de reescritura desde cero.
@@ -77,9 +85,11 @@ El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `ha
 - Verificar que funciona igual en modo claro y oscuro.
 
 ### Criterios de aceptación
-- [ ] El título no puede arrastrarse fuera de los bordes visibles del lienzo del video
-- [ ] Al recargar la página, el título aparece en la misma posición donde se dejó
-- [ ] No se rompió ninguna funcionalidad existente del editor (estilos, edición de texto, etc.)
+- [x] El título no puede arrastrarse fuera de los bordes visibles del lienzo del video ✅
+- [x] Al recargar la página, el título aparece en la misma posición donde se dejó ✅
+- [x] No se rompió ninguna funcionalidad existente del editor (estilos, edición de texto, etc.) ✅
+- [x] El input de título principal tiene un límite de 32 caracteres (bloqueado en maxLength), con contador visible "X/32" ✅
+- [x] A 32 caracteres máximos en font-black uppercase, el título permanece arrastrable dentro de los bordes del contenedor sin quedar bloqueado — seguro tanto en desktop (540px) como en mobile (320px) ✅
 
 ### Fuera de alcance en esta fase
 - Posición individual por clip (eso es Fase 5)
@@ -89,7 +99,7 @@ El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `ha
 
 ## Fase 2: Subir archivo .mp4 propio
 **Estado:** 🔲 Pendiente
-**Depende de:** Fase 0 completa.
+**Depende de:** Fase 0 y Fase 1 completas. ✅
 
 ### Tarea
 Permitir que el usuario suba un archivo `.mp4` desde su computadora como clip, en vez de solo pegar una URL.
