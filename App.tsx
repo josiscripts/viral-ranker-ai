@@ -198,6 +198,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home'); 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isProcessingVideo, setIsProcessingVideo] = useState(false);
+  const [uploadingClipId, setUploadingClipId] = useState<string | null>(null);
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
@@ -265,6 +267,72 @@ const App: React.FC = () => {
     }
     const updatedClips = project.clips.map(c => c.id === id ? { ...c, ...updates } : c);
     updateCurrentProject({ clips: updatedClips });
+  };
+
+  const handleFileUpload = async (clipId: string, file: File) => {
+    setUploadingClipId(clipId);
+    setUploadErrors({ ...uploadErrors, [clipId]: '' });
+
+    try {
+      if (file.type !== 'video/mp4') {
+        throw new Error('Only .mp4 files are allowed');
+      }
+
+      const formData = new FormData();
+      formData.append('video', file);
+
+      console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB) a http://localhost:3001/api/upload`);
+
+      const response = await fetch('http://localhost:3001/api/upload', {
+        method: 'POST',
+        body: formData
+      });
+
+      console.log(`[UPLOAD] Response status: ${response.status}`);
+      console.log(`[UPLOAD] Response headers:`, {
+        contentType: response.headers.get('content-type'),
+        contentLength: response.headers.get('content-length')
+      });
+
+      // Read response as text first to see what we actually got
+      const responseText = await response.text();
+      console.log(`[UPLOAD] Response body (raw):`, responseText);
+
+      if (!response.ok) {
+        try {
+          const error = JSON.parse(responseText);
+          console.log(`[UPLOAD] Error JSON parsed:`, error);
+          throw new Error(error.error || `HTTP ${response.status}: Upload failed`);
+        } catch (parseErr) {
+          console.error(`[UPLOAD] Failed to parse error response:`, parseErr);
+          throw new Error(`HTTP ${response.status}: ${responseText || 'Unknown error'}`);
+        }
+      }
+
+      // Parse success response
+      try {
+        const data = JSON.parse(responseText);
+        console.log(`[UPLOAD] Success JSON parsed:`, data);
+        const { videoUrl, duration } = data;
+
+        const updatedClips = project.clips.map(c =>
+          c.id === clipId ? { ...c, url: videoUrl, endTime: Math.min(duration, 5) } : c
+        );
+        updateCurrentProject({ clips: updatedClips });
+        setUploadErrors({ ...uploadErrors, [clipId]: '' });
+        console.log(`[UPLOAD] Clip actualizado exitosamente`);
+      } catch (parseErr) {
+        console.error(`[UPLOAD] Failed to parse success response:`, parseErr);
+        throw new Error('Invalid response from server');
+      }
+    } catch (err: any) {
+      const errorMsg = err.message || 'Upload failed';
+      setUploadErrors({ ...uploadErrors, [clipId]: errorMsg });
+      console.error(`[UPLOAD] Upload error for clip ${clipId}:`, errorMsg);
+      console.error(`[UPLOAD] Full error object:`, err);
+    } finally {
+      setUploadingClipId(null);
+    }
   };
 
   const handleCreateNewProject = () => {
@@ -769,6 +837,9 @@ const App: React.FC = () => {
                     menuOpenId={menuOpenId}
                     onOpenMenu={setMenuOpenId}
                     lang={lang}
+                    onFileUpload={handleFileUpload}
+                    uploadingClipId={uploadingClipId}
+                    uploadError={uploadErrors}
                   />
                 ))}
               </section>
@@ -843,8 +914,11 @@ const ToolbarDropdown: React.FC<{ label?: string | React.ReactNode, icon?: React
   <button className={`flex items-center gap-1 p-2 rounded-lg transition-all ${isDarkMode ? 'text-gray-500 hover:bg-white/5 hover:text-white' : 'text-gray-600 hover:bg-white hover:text-black'}`}>{label || icon} <ChevronDown size={14} className="opacity-50" /></button>
 );
 
-const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: any, onRemove: any, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es' }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang }) => {
+const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: any, onRemove: any, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, uploadingClipId?: string | null, uploadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, uploadingClipId, uploadError }) => {
+  const [sourceTab, setSourceTab] = useState<'url' | 'upload'>('url');
   const isMenuOpen = menuOpenId === clip.id;
+  const isUploading = uploadingClipId === clip.id;
+  const error = uploadError?.[clip.id];
   const handleTitleTransform = (type: 'upper' | 'lower' | 'capitalize') => { let newTitle = clip.title; if (type === 'upper') newTitle = clip.title.toUpperCase(); if (type === 'lower') newTitle = clip.title.toLowerCase(); if (type === 'capitalize') newTitle = clip.title.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' '); onUpdate(clip.id, { title: newTitle }); onOpenMenu(null); };
   return (
     <div onClick={onClick} className={`rounded-[32px] border transition-all cursor-pointer p-8 relative ${active ? (isDarkMode ? 'border-blue-500/40 bg-[#161616] shadow-2xl' : 'border-blue-300 bg-blue-50/30 shadow-xl') : (isDarkMode ? 'border-white/5 bg-[#111] hover:border-white/10' : 'bg-white border-gray-100 hover:border-gray-200 hover:shadow-md')}`}>
@@ -860,7 +934,15 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={clip.url} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4" onClick={e => e.stopPropagation()}><div className={`flex items-center gap-3 backdrop-blur-xl border rounded-2xl px-5 py-3 shadow-2xl transition-colors ${isDarkMode ? 'bg-[#111]/90 border-white/10' : 'bg-white/90 border-gray-200 shadow-lg'}`}><LinkIcon size={14} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} /><input type="text" placeholder={lang === 'es' ? "Pegar enlace viral..." : "Paste viral link..."} value={clip.url} onChange={e => onUpdate(clip.id, { url: e.target.value })} className={`bg-transparent border-none text-[11px] w-full focus:ring-0 font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`} /></div></div></div>
+        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={clip.url} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4 space-y-2" onClick={e => e.stopPropagation()}>
+            <div className="flex gap-2"><button onClick={() => setSourceTab('url')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'url' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Enlace' : 'URL'}</button><button onClick={() => setSourceTab('upload')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'upload' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Archivo' : 'File'}</button></div>
+            {sourceTab === 'url' ? (
+              <div className={`flex items-center gap-3 backdrop-blur-xl border rounded-2xl px-5 py-3 shadow-2xl transition-colors ${isDarkMode ? 'bg-[#111]/90 border-white/10' : 'bg-white/90 border-gray-200 shadow-lg'}`}><LinkIcon size={14} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} /><input type="text" placeholder={lang === 'es' ? "Pegar enlace viral..." : "Paste viral link..."} value={clip.url} onChange={e => onUpdate(clip.id, { url: e.target.value })} className={`bg-transparent border-none text-[11px] w-full focus:ring-0 font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`} /></div>
+            ) : (
+              <div className={`flex items-center gap-2 relative ${isDarkMode ? 'bg-[#111]/90' : 'bg-white/90'} backdrop-blur-xl border rounded-2xl px-3 py-2 shadow-2xl transition-colors`}><input type="file" accept="video/mp4" onChange={e => { const file = e.target.files?.[0]; if (file && onFileUpload) onFileUpload(clip.id, file); }} disabled={isUploading} className={`hidden`} id={`file-${clip.id}`} /><label htmlFor={`file-${clip.id}`} className={`flex-1 flex items-center gap-2 cursor-pointer text-[11px] font-bold ${isUploading ? (isDarkMode ? 'text-gray-600' : 'text-gray-400') : (isDarkMode ? 'text-white' : 'text-gray-900')}`}>{isUploading ? <Loader2 size={14} className="animate-spin" /> : <VideoIcon size={14} />} {lang === 'es' ? 'Seleccionar archivo...' : 'Select file...'}</label></div>
+            )}
+            {error && <span className="text-[10px] text-red-500 font-bold">{error}</span>}
+          </div></div>
         <div className={`border rounded-[24px] p-6 flex flex-col justify-center gap-6 shadow-inner transition-colors ${isDarkMode ? 'bg-[#0c0c0c] border-white/5' : 'bg-gray-50 border-gray-100'}`}><div className="grid grid-cols-2 gap-6" onClick={e => e.stopPropagation()}><div className="space-y-2"><span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Entrada" : "In-point"}</span><input type="number" step="0.1" value={clip.startTime} onChange={e => onUpdate(clip.id, { startTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} /></div><div className="space-y-2"><span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Salida" : "Out-point"}</span><input type="number" step="0.1" value={clip.endTime} onChange={e => onUpdate(clip.id, { endTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} /></div></div><div className="flex items-center gap-2 text-gray-400"><Maximize2 size={12}/><span className="text-[8px] font-black uppercase tracking-widest">{lang === 'es' ? "Ajustar a Duración de Gancho Viral" : "Trim to Viral Hook Duration"}</span></div></div>
       </div>
     </div>

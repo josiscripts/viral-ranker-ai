@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import healthRoutes from './routes/health.js';
+import uploadRoutes from './routes/upload.js';
+import filesRoutes from './routes/files.js';
 
 dotenv.config();
 
@@ -20,8 +22,11 @@ app.use(
 app.use(express.json());
 
 app.use('/api', healthRoutes);
+app.use('/api', uploadRoutes);
+app.use('/api', filesRoutes);
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
   console.log(`📡 CORS enabled for ${FRONTEND_URL}`);
+  console.log(`📁 Video uploads: /server/storage/uploads`);
 });

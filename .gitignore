@@ -29,6 +29,7 @@ dist-ssr/
 /server/storage/
 /server/uploads/
 /server/temp/
+/server/storage/**/*
 
 # Editor directories and files
 .vscode/*

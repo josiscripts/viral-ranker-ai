@@ -98,8 +98,18 @@ El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `ha
 ---
 
 ## Fase 2: Subir archivo .mp4 propio
-**Estado:** 🔲 Pendiente
+**Estado:** ✅ Completa
 **Depende de:** Fase 0 y Fase 1 completas. ✅
+**Verificación:** ✅ Manual y exitosa (161MB sube y reproduce, 316MB rechazado con error legible)
+
+**Archivos creados/modificados:**
+- `/server/src/services/videoService.ts` — Validación por extensión, ffprobe para confirmar MP4, limpieza de archivos fallidos
+- `/server/src/routes/upload.ts` — Endpoint POST /api/upload con manejo robusto de errores
+- `/server/src/routes/files.ts` — Endpoint GET /api/files/:filename con Range requests
+- `/server/src/index.ts` — Rutas agregadas
+- `/server/package.json` — Dependencias: multer, @types/multer
+- `/.gitignore` — Excluye /server/storage/** (archivos de video no se suben al repo)
+- `/App.tsx` — UI con tabs (URL/File), estado de upload, logs detallados para debugging
 
 ### Tarea
 Permitir que el usuario suba un archivo `.mp4` desde su computadora como clip, en vez de solo pegar una URL.
@@ -224,4 +234,4 @@ Reemplazar por completo el `handleExport` actual (barra de progreso falsa + desc
 ## Notas / Deuda técnica
 (Esta sección se va llenando durante el desarrollo — cualquier cosa detectada fuera de orden de fase se anota aquí en vez de implementarse de inmediato)
 
--
+- **Fase 2 (Deuda técnica)**: Los archivos subidos en `/server/storage/uploads/` no se borran automáticamente. Actualmente permanecen en disco indefinidamente una vez generados. Para Fase 6 (Exportación) considerar: (a) borrar archivo tras generar export final, (b) implementar garbage collector que borre archivos > N días, o (c) usar almacenamiento temporal del SO. Impacto: acumulación de espacio en disco. Prioridad: media (después de que Fase 6 esté funcional).
