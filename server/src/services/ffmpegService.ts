@@ -75,11 +75,15 @@ export async function addTextOverlay(options: DrawTextOptions): Promise<void> {
   const escapedMainTitle = mainTitle.replace(/'/g, "\\'").replace(/:/g, "\\:");
   const escapedClipTitle = clipTitle?.replace(/'/g, "\\'").replace(/:/g, "\\:") || '';
 
-  // Build drawtext filter
-  let filterComplex = `drawtext=text='${escapedMainTitle}':x=${mainTitleX}:y=${mainTitleY}:fontsize=40:fontcolor=${mainTitleColor}:borderw=${mainTitleStroke}:bordercolor=black`;
+  // Remove hashtag from color if present, use 'white' as fallback
+  const cleanMainColor = mainTitleColor.replace('#', '') || 'white';
+  const cleanClipColor = clipTitleColor?.replace('#', '') || cleanMainColor || 'white';
+
+  // Build drawtext filter (multiple filters separated by comma)
+  let filterComplex = `drawtext=text='${escapedMainTitle}':x=${mainTitleX}:y=${mainTitleY}:fontsize=40:fontcolor=${cleanMainColor}:borderw=${mainTitleStroke}:bordercolor=black`;
 
   if (clipTitle && clipTitleX !== undefined && clipTitleY !== undefined) {
-    filterComplex += `:drawtext=text='${escapedClipTitle}':x=${clipTitleX}:y=${clipTitleY}:fontsize=32:fontcolor=${clipTitleColor || mainTitleColor}:borderw=${clipTitleStroke || mainTitleStroke}:bordercolor=black`;
+    filterComplex += `,drawtext=text='${escapedClipTitle}':x=${clipTitleX}:y=${clipTitleY}:fontsize=32:fontcolor=${cleanClipColor}:borderw=${clipTitleStroke || mainTitleStroke}:bordercolor=black`;
   }
 
   const cmd = [

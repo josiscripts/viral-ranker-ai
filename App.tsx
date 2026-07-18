@@ -520,34 +520,53 @@ const App: React.FC = () => {
       const { jobId } = await createResponse.json();
       setExportJobId(jobId);
 
-      // Step 2: Poll for job status every 500ms
+      // Step 2: Poll for job status every 500ms (max 600 attempts = 5 minutes)
       let completed = false;
       let lastError: string | null = null;
+      const MAX_RETRIES = 600;
+      let retries = 0;
 
-      while (!completed && !lastError) {
+      while (!completed && !lastError && retries < MAX_RETRIES) {
         await new Promise(resolve => setTimeout(resolve, 500));
+        retries++;
 
-        const statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`);
-        if (!statusResponse.ok) {
-          throw new Error('Failed to check export status');
+        try {
+          const statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`, {
+            signal: AbortSignal.timeout(5000)
+          });
+          if (!statusResponse.ok) {
+            throw new Error(`Backend returned ${statusResponse.status}: ${statusResponse.statusText}`);
+          }
+
+          const status = await statusResponse.json();
+          setExportProgress(status.progress);
+
+          if (status.status === 'completed') {
+            completed = true;
+            // Download the file
+            const link = document.createElement('a');
+            link.href = `http://localhost:3001${status.downloadUrl}`;
+            link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          } else if (status.status === 'error') {
+            lastError = status.error || 'Unknown export error';
+            throw new Error(lastError);
+          }
+        } catch (pollError) {
+          const pollMessage = pollError instanceof Error ? pollError.message : 'Unknown error';
+          if (pollMessage.includes('AbortError') || pollMessage.includes('timeout')) {
+            // Timeout on this request, but continue polling
+            continue;
+          }
+          throw new Error(`Export status check failed: ${pollMessage}`);
         }
+      }
 
-        const status = await statusResponse.json();
-        setExportProgress(status.progress);
-
-        if (status.status === 'completed') {
-          completed = true;
-          // Download the file
-          const link = document.createElement('a');
-          link.href = `http://localhost:3001${status.downloadUrl}`;
-          link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        } else if (status.status === 'error') {
-          lastError = status.error || 'Unknown export error';
-          throw new Error(lastError);
-        }
+      // Check if we hit max retries
+      if (retries >= MAX_RETRIES && !completed) {
+        throw new Error('Exportación tardó demasiado. El servidor puede estar muy ocupado.');
       }
 
       // Success - keep progress bar visible for a moment
