@@ -57,7 +57,43 @@ import { Clip, Project, UserProfile } from './types';
 import { generateRankingScript } from './services/geminiService';
 import ProfileView from './ProfileView';
 import { translations } from './translations';
+import TrimTimeline from './TrimTimeline';
 
+const getClipLayoutConfig = (clipCount: number) => {
+  if (clipCount <= 4) {
+    return {
+      spacing: 'space-y-8',
+      rankFontSize: 'text-5xl',
+      titleFontSize: 'text-[12px]',
+      topPosition: 'top-[20%]',
+      containerGap: 'gap-5'
+    };
+  } else if (clipCount <= 6) {
+    return {
+      spacing: 'space-y-6',
+      rankFontSize: 'text-4xl',
+      titleFontSize: 'text-[11px]',
+      topPosition: 'top-[28%]',
+      containerGap: 'gap-4'
+    };
+  } else if (clipCount <= 8) {
+    return {
+      spacing: 'space-y-4',
+      rankFontSize: 'text-3xl',
+      titleFontSize: 'text-[10px]',
+      topPosition: 'top-[32%]',
+      containerGap: 'gap-3'
+    };
+  } else {
+    return {
+      spacing: 'space-y-2',
+      rankFontSize: 'text-2xl',
+      titleFontSize: 'text-[9px]',
+      topPosition: 'top-[36%]',
+      containerGap: 'gap-2'
+    };
+  }
+};
 
 const STYLE_PRESETS = [
   { id: 'NONE', name: 'None', classes: 'text-white font-medium', accentColor: 'text-white', shadow: '' },
@@ -241,6 +277,20 @@ const App: React.FC = () => {
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
+  useEffect(() => {
+    if (!videoRef.current || !activeClip?.url) return;
+
+    const video = videoRef.current;
+    const currentTime = video.currentTime;
+    const isOutOfRange = currentTime < activeClip.startTime || currentTime > activeClip.endTime;
+
+    if (isOutOfRange) {
+      const newTime = currentTime < activeClip.startTime ? activeClip.startTime : activeClip.endTime;
+      video.currentTime = newTime;
+      video.pause();
+    }
+  }, [activeClip?.startTime, activeClip?.endTime, activeClip?.url]);
+
   const handleTogglePlay = () => {
     if (videoRef.current) {
       if (isPlaying) videoRef.current.pause();
@@ -298,7 +348,7 @@ const App: React.FC = () => {
 
         const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
         const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, endTime: Math.min(duration, 5) } : c
+          c.id === clipId ? { ...c, url: absoluteVideoUrl, duration, endTime: Math.min(duration, 5) } : c
         );
         updateCurrentProject({ clips: updatedClips });
         setDownloadErrors({ ...downloadErrors, [clipId]: '' });
@@ -362,12 +412,13 @@ const App: React.FC = () => {
         console.log(`[UPLOAD] Success JSON parsed:`, data);
         const { videoUrl, duration } = data;
 
+        const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
         const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: videoUrl, endTime: Math.min(duration, 5) } : c
+          c.id === clipId ? { ...c, url: absoluteVideoUrl, duration, endTime: Math.min(duration, 5) } : c
         );
         updateCurrentProject({ clips: updatedClips });
         setUploadErrors({ ...uploadErrors, [clipId]: '' });
-        console.log(`[UPLOAD] Clip actualizado exitosamente`);
+        console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${absoluteVideoUrl}`);
       } catch (parseErr) {
         console.error(`[UPLOAD] Failed to parse success response:`, parseErr);
         throw new Error('Invalid response from server');
@@ -854,22 +905,31 @@ const App: React.FC = () => {
                 </div>
               </section>
 
-              <section className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>{lang === 'es' ? "MOMENTOS DE CLASIFICACIÓN" : "RANKING MOMENTS"}</h3>
-                  <button 
+              <section className="flex flex-col gap-4 h-full">
+                <div className="flex items-center justify-between flex-shrink-0">
+                  <div className="flex items-center justify-between gap-4 flex-1">
+                    <h3 className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>{lang === 'es' ? "MOMENTOS DE CLASIFICACIÓN" : "RANKING MOMENTS"}</h3>
+                    <span className={`text-[9px] font-bold ${isDarkMode ? 'text-gray-600' : 'text-gray-500'}`}>{project.clips.length}/10</span>
+                  </div>
+                  <button
                     onClick={() => {
                       const nextRank = project.clips.length + 1;
                       const newClip: Clip = { id: `clip_${Date.now()}`, url: '', startTime: 0, endTime: 5, rank: nextRank, title: `Rank #${nextRank} Item`, titleStyleId: 'BLUE_BOX' };
                       updateCurrentProject({ clips: [...project.clips, newClip] });
                       setActiveClipId(newClip.id);
                     }}
-                    className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-xl transition-all ${isDarkMode ? 'bg-white/5 text-blue-400 hover:bg-white/10' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                    disabled={project.clips.length >= 10}
+                    className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-xl transition-all flex-shrink-0 ${
+                      project.clips.length >= 10
+                        ? isDarkMode ? 'bg-white/5 text-gray-600 cursor-not-allowed opacity-50' : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-50'
+                        : isDarkMode ? 'bg-white/5 text-blue-400 hover:bg-white/10' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                    }`}
                   >
                     <Plus size={14} /> {lang === 'es' ? "Agregar Clip" : "Add Clip"}
                   </button>
                 </div>
-                {project.clips.map((clip, index) => (
+                <div className={`flex-1 overflow-y-auto space-y-6 pr-4 max-h-[calc(100vh-300px)] ${isDarkMode ? 'scrollbar-dark' : 'scrollbar-light'}`}>
+                  {project.clips.map((clip, index) => (
                   <ClipCard
                     key={clip.id} clip={clip} index={index} active={activeClipId === clip.id}
                     onClick={() => setActiveClipId(clip.id)}
@@ -892,6 +952,7 @@ const App: React.FC = () => {
                     downloadError={downloadErrors}
                   />
                 ))}
+                </div>
               </section>
             </div>
 
@@ -904,19 +965,24 @@ const App: React.FC = () => {
                 <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
                   {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={activeClip.url} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
                 </div>
-                <div className="absolute left-10 top-[35%] space-y-8 pointer-events-none z-50">
-                  {project.clips.map((c, i) => {
-                    const rankStyle = STYLE_PRESETS.find(s => s.id === (c.rankStyleId || 'BLUE_BOX')) || currentStyle;
-                    const titleStyle = STYLE_PRESETS.find(s => s.id === (c.titleStyleId || 'BLUE_BOX')) || currentStyle;
-                    const isItemActive = activeClipId === c.id;
-                    return (
-                      <div key={c.id} className={`flex items-center gap-5 transition-all duration-500 ${isItemActive ? 'scale-125 opacity-100' : 'opacity-20 scale-90'}`}>
-                        <span className={`text-4xl font-black italic ${rankStyle.classes} ${rankStyle.shadow}`} style={{ WebkitTextStroke: isItemActive ? '1px black' : '0' }}>{c.rank}.</span>
-                        {isItemActive && <div className={`text-[12px] px-4 py-1.5 rounded-sm shadow-2xl tracking-tighter truncate max-w-[140px] ${titleStyle.classes} ${titleStyle.shadow} ${titleStyle.id === 'ALERT' || titleStyle.id === 'BLUE_BOX' ? '' : 'bg-black/20 backdrop-blur-md border border-white/5'} ${c.titleItalic ? 'italic' : ''}`}>{c.title}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+                {(() => {
+                  const layoutConfig = getClipLayoutConfig(project.clips.length);
+                  return (
+                    <div className={`absolute left-10 ${layoutConfig.topPosition} ${layoutConfig.spacing} pointer-events-none z-50`}>
+                      {project.clips.map((c, i) => {
+                        const rankStyle = STYLE_PRESETS.find(s => s.id === (c.rankStyleId || 'BLUE_BOX')) || currentStyle;
+                        const titleStyle = STYLE_PRESETS.find(s => s.id === (c.titleStyleId || 'BLUE_BOX')) || currentStyle;
+                        const isItemActive = activeClipId === c.id;
+                        return (
+                          <div key={c.id} className={`flex items-center ${layoutConfig.containerGap} transition-all duration-500 ${isItemActive ? 'scale-125 opacity-100' : 'opacity-20 scale-90'}`}>
+                            <span className={`${layoutConfig.rankFontSize} font-black italic ${rankStyle.classes} ${rankStyle.shadow}`} style={{ WebkitTextStroke: isItemActive ? '1px black' : '0' }}>{c.rank}.</span>
+                            {isItemActive && <div className={`${layoutConfig.titleFontSize} px-4 py-1.5 rounded-sm shadow-2xl tracking-tighter truncate max-w-[140px] ${titleStyle.classes} ${titleStyle.shadow} ${titleStyle.id === 'ALERT' || titleStyle.id === 'BLUE_BOX' ? '' : 'bg-black/20 backdrop-blur-md border border-white/5'} ${c.titleItalic ? 'italic' : ''}`}>{c.title}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 <div className="absolute bottom-12 inset-x-0 px-8 z-50">
                   <div className="bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[40px] p-2 flex flex-col gap-4 shadow-2xl">
                     <div className="flex items-center justify-between px-6">
@@ -996,7 +1062,23 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
             {sourceTab === 'url' && downloadErr && <span className="text-[10px] text-red-500 font-bold">{downloadErr}</span>}
             {sourceTab === 'upload' && uploadErr && <span className="text-[10px] text-red-500 font-bold">{uploadErr}</span>}
           </div></div>
-        <div className={`border rounded-[24px] p-6 flex flex-col justify-center gap-6 shadow-inner transition-colors ${isDarkMode ? 'bg-[#0c0c0c] border-white/5' : 'bg-gray-50 border-gray-100'}`}><div className="grid grid-cols-2 gap-6" onClick={e => e.stopPropagation()}><div className="space-y-2"><span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Entrada" : "In-point"}</span><input type="number" step="0.1" value={clip.startTime} onChange={e => onUpdate(clip.id, { startTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} /></div><div className="space-y-2"><span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Salida" : "Out-point"}</span><input type="number" step="0.1" value={clip.endTime} onChange={e => onUpdate(clip.id, { endTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} /></div></div><div className="flex items-center gap-2 text-gray-400"><Maximize2 size={12}/><span className="text-[8px] font-black uppercase tracking-widest">{lang === 'es' ? "Ajustar a Duración de Gancho Viral" : "Trim to Viral Hook Duration"}</span></div></div>
+        <div className={`border rounded-[24px] p-6 flex flex-col justify-center gap-6 shadow-inner transition-colors ${isDarkMode ? 'bg-[#0c0c0c] border-white/5' : 'bg-gray-50 border-gray-100'}`}>
+          <div className="grid grid-cols-2 gap-6" onClick={e => e.stopPropagation()}>
+            <div className="space-y-2">
+              <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Entrada" : "In-point"}</span>
+              <input type="number" step="0.1" value={clip.startTime} onChange={e => onUpdate(clip.id, { startTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+            </div>
+            <div className="space-y-2">
+              <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Salida" : "Out-point"}</span>
+              <input type="number" step="0.1" value={clip.endTime} onChange={e => onUpdate(clip.id, { endTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+            </div>
+          </div>
+          {clip.url && clip.duration && <TrimTimeline duration={clip.duration} startTime={clip.startTime} endTime={clip.endTime} onStartChange={(newStart: number) => onUpdate(clip.id, { startTime: newStart })} onEndChange={(newEnd: number) => onUpdate(clip.id, { endTime: newEnd })} isDarkMode={isDarkMode} />}
+          <div className="flex items-center gap-2 text-gray-400">
+            <Maximize2 size={12}/>
+            <span className="text-[8px] font-black uppercase tracking-widest">{lang === 'es' ? "Ajustar a Duración de Gancho Viral" : "Trim to Viral Hook Duration"}</span>
+          </div>
+        </div>
       </div>
     </div>
   );

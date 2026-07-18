@@ -5,6 +5,7 @@ export interface Clip {
   thumbnail?: string;
   startTime: number;
   endTime: number;
+  duration?: number;
   rank: number;
   title: string;
   rankStyleId?: string;

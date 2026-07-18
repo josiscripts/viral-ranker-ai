@@ -100,7 +100,7 @@ El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `ha
 ## Fase 2: Subir archivo .mp4 propio
 **Estado:** ✅ Completa
 **Depende de:** Fase 0 y Fase 1 completas. ✅
-**Verificación:** ✅ Manual y exitosa (161MB sube y reproduce, 316MB rechazado con error legible)
+**Verificación:** ✅ Manual en navegador — archivo .mp4 sube, se reproduce correctamente en preview, Range requests funcionan para scrubbing
 
 **Archivos creados/modificados:**
 - `/server/src/services/videoService.ts` — Validación por extensión, ffprobe para confirmar MP4, limpieza de archivos fallidos
@@ -109,7 +109,7 @@ El arrastre libre del título principal (`titlePosition`, `enableTitleDrag`, `ha
 - `/server/src/index.ts` — Rutas agregadas
 - `/server/package.json` — Dependencias: multer, @types/multer
 - `/.gitignore` — Excluye /server/storage/** (archivos de video no se suben al repo)
-- `/App.tsx` — UI con tabs (URL/File), estado de upload, logs detallados para debugging
+- `/App.tsx` — UI con tabs (URL/File), estado de upload, handleFileUpload con conversión a URL absoluta, logs detallados para debugging
 
 ### Tarea
 Permitir que el usuario suba un archivo `.mp4` desde su computadora como clip, en vez de solo pegar una URL.
@@ -119,11 +119,11 @@ Permitir que el usuario suba un archivo `.mp4` desde su computadora como clip, e
 - Reemplazar el uso de `fetchCleanVideoMP4` (mock) por la llamada real al nuevo endpoint cuando el origen es un archivo local.
 
 ### Criterios de aceptación
-- [ ] Solo se aceptan archivos con extensión/mimetype `.mp4` (o formatos de video válidos definidos explícitamente); cualquier otro formato devuelve error claro al usuario
-- [ ] Existe un límite de tamaño de archivo razonable (definir un número, ej. 200MB) y se rechaza con mensaje claro si se excede
-- [ ] El video subido se puede reproducir correctamente en el preview del editor
-- [ ] Se muestra un estado de carga (loading) mientras se sube, y un error visible si falla
-- [ ] El archivo subido persiste en el backend el tiempo suficiente para que el usuario pueda exportar el proyecto después
+- [x] Solo se aceptan archivos con extensión/mimetype `.mp4` (o formatos de video válidos definidos explícitamente); cualquier otro formato devuelve error claro al usuario ✅
+- [x] Existe un límite de tamaño de archivo razonable (definir un número, ej. 200MB) y se rechaza con mensaje claro si se excede ✅
+- [x] El video subido se puede reproducir correctamente en el preview del editor ✅
+- [x] Se muestra un estado de carga (loading) mientras se sube, y un error visible si falla ✅
+- [x] El archivo subido persiste en el backend el tiempo suficiente para que el usuario pueda exportar el proyecto después ✅
 
 ### Fuera de alcance en esta fase
 - Descarga desde YouTube/TikTok/Instagram (Fase 3)
@@ -167,8 +167,21 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 4: Límite de 10 clips + edición de duración (trim) con preview
-**Estado:** 🔲 Pendiente
-**Depende de:** Fase 3 completa.
+**Estado:** ✅ Completa
+**Depende de:** Fase 3 completa. ✅
+**Verificación:** ✅ Manual en navegador (3, 7, 10 clips — layout dinámico, todos visibles)
+
+**Archivos creados/modificados:**
+- `/TrimTimeline.tsx` — Componente nuevo para timeline interactivo (handles arrastrables, validación start < end)
+- `/types.ts` — Agregado campo `duration?: number` a `Clip` para track de duración real del video
+- `/App.tsx`:
+  - Función `getClipLayoutConfig(clipCount)` — Calcula dinámicamente spacing, font-size, posición según cantidad de clips
+  - Estado `downloadingClipId`, `downloadErrors` — Para descarga de URLs
+  - useEffect de scrubbing (Opción C) — Pausa y salta si currentTime sale del rango [startTime, endTime]
+  - Botón "Agregar Clip" con `disabled` y contador "X/10"
+  - Integración de `TrimTimeline` en `ClipCard`
+  - Preview visual con `getClipLayoutConfig` para adaptar tamaño de texto y espaciado dinámicamente
+  - Contenedor de clips con scroll (`overflow-y-auto`, `max-h-[calc(100vh-300px)]`)
 
 ### Tarea
 - Agregar la validación de máximo 10 clips por proyecto: deshabilitar el botón de "agregar clip" al llegar al límite y mostrar contador (ej. "8/10").
@@ -176,11 +189,12 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 - Conectar los handles al `startTime` y `endTime` ya existentes en el tipo `Clip`.
 
 ### Criterios de aceptación
-- [ ] No se puede agregar un clip número 11 a un proyecto; el botón se deshabilita y se muestra el conteo actual
-- [ ] El usuario puede arrastrar visualmente el punto de inicio y fin del clip sobre una línea de tiempo
-- [ ] Al mover los handles, el preview de video salta a ese punto exacto (scrubbing funcional)
-- [ ] No se permite que `startTime` sea mayor o igual a `endTime` (validación básica)
-- [ ] Los valores de `startTime`/`endTime` se guardan correctamente en el proyecto (localStorage)
+- [x] No se puede agregar un clip número 11 a un proyecto; el botón se deshabilita y se muestra el conteo actual ✅
+- [x] El usuario puede arrastrar visualmente el punto de inicio y fin del clip sobre una línea de tiempo ✅
+- [x] Al mover los handles, el preview de video salta a ese punto exacto (scrubbing funcional) ✅
+- [x] No se permite que `startTime` sea mayor o igual a `endTime` (validación básica) ✅
+- [x] Los valores de `startTime`/`endTime` se guardan correctamente en el proyecto (localStorage) ✅
+- [x] El preview visual se adapta dinámicamente: con 3 clips son grandes (text-5xl), con 10 clips son pequeños (text-2xl) pero TODOS visibles ✅
 
 ### Fuera de alcance en esta fase
 - Recorte físico real del archivo de video (eso pasa en la Fase 6, exportación)
@@ -242,5 +256,5 @@ Reemplazar por completo el `handleExport` actual (barra de progreso falsa + desc
 ## Notas / Deuda técnica
 (Esta sección se va llenando durante el desarrollo — cualquier cosa detectada fuera de orden de fase se anota aquí en vez de implementarse de inmediato)
 
-- **Fase 2 (Deuda técnica)**: Los archivos subidos en `/server/storage/uploads/` no se borran automáticamente. Actualmente permanecen en disco indefinidamente una vez generados. Para Fase 6 (Exportación) considerar: (a) borrar archivo tras generar export final, (b) implementar garbage collector que borre archivos > N días, o (c) usar almacenamiento temporal del SO. Impacto: acumulación de espacio en disco. Prioridad: media (después de que Fase 6 esté funcional).
-- **Fase 2 (Deuda técnica)**: Problema de preview en archivos `.mp4` subidos — cuando el usuario sube un archivo `.mp4` desde el tab "File", el video no aparece en el preview; se sigue viendo el video mock en lugar del archivo recién subido. El endpoint de descarga de URLs (Fase 3) funciona correctamente, pero el flujo de carga de archivos tiene un problema de sincronización. A revisar en iteración de Fase 2. Impacto: el usuario no puede verificar visualmente que el archivo se subió correctamente hasta cambiar de clip y volver. Prioridad: media.
+- **Fase 2 (Deuda técnica)**: Los archivos subidos en `/server/storage/uploads/` no se borran automáticamente. Actualmente permanecen en disco indefinidamente una vez generados. Para Fase 6 (Exportación) considerar: (a) borrar archivo tras generar export final, (b) implementar garbage collector que borde archivos > N días, o (c) usar almacenamiento temporal del SO. Impacto: acumulación de espacio en disco. Prioridad: media (después de que Fase 6 esté funcional).
+- **Fase 4 (Deuda técnica)**: Panel de control (play/pause/timeline) en el preview está posicionado en medio del lienzo, lo que puede interferir visualmente con la visualización de los clips de ranking en ciertos layouts. A resolver como mejora cosmética: reposicionar el panel al fondo del preview o hacerlo más discreto. Impacto: cosmético, sin afectar funcionalidad. Prioridad: baja.
