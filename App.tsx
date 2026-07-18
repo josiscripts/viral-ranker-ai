@@ -257,6 +257,8 @@ const App: React.FC = () => {
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [exportJobId, setExportJobId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [isPlaying, setIsPlaying] = useState(true);
@@ -475,20 +477,93 @@ const App: React.FC = () => {
   };
 
   const handleExport = async () => {
-    if (!activeClip?.url) return;
+    if (project.clips.length === 0) {
+      setExportError('No clips to export');
+      return;
+    }
+
     setIsExporting(true);
     setExportProgress(0);
-    for (let i = 0; i <= 100; i += 2) {
-      setExportProgress(i);
-      await new Promise(resolve => setTimeout(resolve, 50));
+    setExportError(null);
+
+    try {
+      // Prepare export request with all project data
+      const exportRequest = {
+        projectId: project.id,
+        title: project.title,
+        titlePosition: project.titlePosition,
+        titleStroke: project.titleStroke,
+        clips: project.clips.map((clip: Clip) => ({
+          id: clip.id,
+          url: clip.url,
+          startTime: clip.startTime,
+          endTime: clip.endTime,
+          rank: clip.rank,
+          title: clip.title,
+          titleStyle: { color: '#FFFFFF' },
+          clipTitlePosition: clip.clipTitlePosition
+        }))
+      };
+
+      // Step 1: Create export job
+      const createResponse = await fetch('http://localhost:3001/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(exportRequest)
+      });
+
+      if (!createResponse.ok) {
+        const errorData = await createResponse.json();
+        throw new Error(errorData.error || 'Failed to start export');
+      }
+
+      const { jobId } = await createResponse.json();
+      setExportJobId(jobId);
+
+      // Step 2: Poll for job status every 500ms
+      let completed = false;
+      let lastError: string | null = null;
+
+      while (!completed && !lastError) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`);
+        if (!statusResponse.ok) {
+          throw new Error('Failed to check export status');
+        }
+
+        const status = await statusResponse.json();
+        setExportProgress(status.progress);
+
+        if (status.status === 'completed') {
+          completed = true;
+          // Download the file
+          const link = document.createElement('a');
+          link.href = `http://localhost:3001${status.downloadUrl}`;
+          link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } else if (status.status === 'error') {
+          lastError = status.error || 'Unknown export error';
+          throw new Error(lastError);
+        }
+      }
+
+      // Success - keep progress bar visible for a moment
+      setTimeout(() => {
+        setIsExporting(false);
+        setExportProgress(0);
+        setExportJobId(null);
+      }, 1500);
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Export failed';
+      setExportError(errorMessage);
+      setIsExporting(false);
+      setExportProgress(0);
+      setExportJobId(null);
     }
-    const link = document.createElement('a');
-    link.href = activeClip.url;
-    link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => { setIsExporting(false); setExportProgress(0); }, 1500);
   };
 
   const handleDragStart = (e: React.MouseEvent) => {

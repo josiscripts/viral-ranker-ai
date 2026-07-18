@@ -5,6 +5,7 @@ import healthRoutes from './routes/health';
 import uploadRoutes from './routes/upload';
 import filesRoutes from './routes/files';
 import downloadRoutes from './routes/download';
+import exportRoutes from './routes/export';
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.use('/api', healthRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', filesRoutes);
 app.use('/api', downloadRoutes);
+app.use('/api', exportRoutes);
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
