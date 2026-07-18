@@ -95,6 +95,29 @@ const getClipLayoutConfig = (clipCount: number) => {
   }
 };
 
+const calculateMinimumHeight = (clipCount: number): number => {
+  if (clipCount === 0) return 20;
+  const layoutConfig = getClipLayoutConfig(clipCount);
+  const fontSizeMap: Record<string, number> = {
+    'text-5xl': 64,
+    'text-4xl': 48,
+    'text-3xl': 30,
+    'text-2xl': 24
+  };
+  const spacingMap: Record<string, number> = {
+    'space-y-8': 32,
+    'space-y-6': 24,
+    'space-y-4': 16,
+    'space-y-2': 8
+  };
+  const fontSize = fontSizeMap[layoutConfig.rankFontSize] || 24;
+  const spacing = spacingMap[layoutConfig.spacing] || 8;
+  const itemHeight = fontSize + spacing;
+  const totalHeight = itemHeight * clipCount;
+  const percentageNeeded = Math.ceil((totalHeight / 560) * 100);
+  return Math.min(Math.max(percentageNeeded, 20), 100);
+};
+
 const STYLE_PRESETS = [
   { id: 'NONE', name: 'None', classes: 'text-white font-medium', accentColor: 'text-white', shadow: '' },
   { id: 'CUSTOM', name: 'Custom', classes: 'text-white font-bold uppercase', accentColor: 'text-blue-400', shadow: 'drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]' },
@@ -249,17 +272,27 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('viral_ranker_dark_mode', String(isDarkMode));
   }, [isDarkMode]);
-  
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const titleElementRef = useRef<HTMLDivElement>(null);
+  const clipTitleElementRef = useRef<HTMLDivElement>(null);
+  const [isDraggingClipTitle, setIsDraggingClipTitle] = useState(false);
+  const [clipTitleDragStart, setClipTitleDragStart] = useState<{ x: number, y: number } | null>(null);
 
   const t = translations[lang];
 
-  const project = useMemo(() => 
-    projects.find(p => p.id === activeProjectId) || projects[0], 
+  const project = useMemo(() =>
+    projects.find(p => p.id === activeProjectId) || projects[0],
     [projects, activeProjectId]
   );
+
+  useEffect(() => {
+    const minHeight = calculateMinimumHeight(project.clips.length);
+    if (project.videoHeight < minHeight) {
+      updateCurrentProject({ videoHeight: minHeight });
+    }
+  }, [project.clips.length, project.id]);
 
   const currentStyle = STYLE_PRESETS.find(s => s.id === project.captionStyle) || STYLE_PRESETS[0];
   const activeClipIndex = useMemo(() => project.clips.findIndex(c => c.id === activeClipId), [project.clips, activeClipId]);
@@ -468,6 +501,17 @@ const App: React.FC = () => {
     });
   };
 
+  const handleClipTitleDragStart = (e: React.MouseEvent) => {
+    if (!project.enableTitleDrag) return;
+    e.preventDefault();
+    setIsDraggingClipTitle(true);
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setClipTitleDragStart({
+      x: e.clientX - rect.left - rect.width / 2,
+      y: e.clientY - rect.top - rect.height / 2
+    });
+  };
+
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
       if (isDragging && previewContainerRef.current && titleElementRef.current) {
@@ -503,6 +547,45 @@ const App: React.FC = () => {
       window.removeEventListener('mouseup', handleGlobalMouseUp);
     };
   }, [isDragging, dragOffset]);
+
+  useEffect(() => {
+    const handleClipTitleMouseMove = (e: MouseEvent) => {
+      if (isDraggingClipTitle && previewContainerRef.current && clipTitleElementRef.current && activeClipId) {
+        const containerRect = previewContainerRef.current.getBoundingClientRect();
+        const clipTitleRect = clipTitleElementRef.current.getBoundingClientRect();
+
+        let x = e.clientX - containerRect.left - containerRect.width / 2 - (clipTitleDragStart?.x || 0);
+        let y = e.clientY - containerRect.top - containerRect.height / 2 - (clipTitleDragStart?.y || 0);
+
+        const titleWidth = clipTitleRect.width;
+        const titleHeight = clipTitleRect.height;
+        const containerWidth = containerRect.width;
+        const containerHeight = containerRect.height;
+
+        const maxX = containerWidth / 2 - titleWidth / 2;
+        const minX = -containerWidth / 2 + titleWidth / 2;
+        const maxY = containerHeight / 2 - titleHeight / 2;
+        const minY = -containerHeight / 2 + titleHeight / 2;
+
+        x = Math.max(minX, Math.min(maxX, x));
+        y = Math.max(minY, Math.min(maxY, y));
+
+        const updatedClips = project.clips.map(clip =>
+          clip.id === activeClipId ? { ...clip, clipTitlePosition: { x, y } } : clip
+        );
+        updateCurrentProject({ clips: updatedClips });
+      }
+    };
+    const handleClipTitleMouseUp = () => setIsDraggingClipTitle(false);
+    if (isDraggingClipTitle) {
+      window.addEventListener('mousemove', handleClipTitleMouseMove);
+      window.addEventListener('mouseup', handleClipTitleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleClipTitleMouseMove);
+      window.removeEventListener('mouseup', handleClipTitleMouseUp);
+    };
+  }, [isDraggingClipTitle, clipTitleDragStart, activeClipId, project.clips]);
 
   const toggleHighlight = (index: number) => {
     const newIndices = project.highlightedIndices.includes(index)
@@ -557,6 +640,18 @@ const App: React.FC = () => {
           {titleContent}
         </div>
       </div>
+    );
+  };
+
+  const renderClipTitle = () => {
+    if (!activeClip || !activeClip.title || !showCaptions) return null;
+    const titleStyle = STYLE_PRESETS.find(s => s.id === (activeClip.titleStyleId || 'BLUE_BOX')) || currentStyle;
+    const clipTitleContent = activeClip.title;
+
+    return (
+      <span className={`${titleStyle.shadow} ${titleStyle.classes}`} style={{ WebkitTextStroke: `1px #000` }}>
+        {clipTitleContent}
+      </span>
     );
   };
 
@@ -861,12 +956,31 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       <div className="flex justify-between items-center">
                         <label className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>{lang === 'es' ? "Altura de Diseño de Video" : "Video Layout Height"}</label>
                         <span className="text-[10px] font-black text-blue-500">{project.videoHeight}%</span>
                       </div>
-                      <input type="range" min="40" max="100" value={project.videoHeight} onChange={(e) => updateCurrentProject({ videoHeight: parseInt(e.target.value) })} className={`w-full h-1.5 rounded-full appearance-none cursor-pointer accent-blue-600 mb-2 ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                      {(() => {
+                        const minHeight = calculateMinimumHeight(project.clips.length);
+                        const isBelowMinimum = project.videoHeight < minHeight;
+                        return (
+                          <>
+                            <input
+                              type="range"
+                              min="40"
+                              max="100"
+                              value={project.videoHeight}
+                              onChange={(e) => updateCurrentProject({ videoHeight: parseInt(e.target.value) })}
+                              className={`w-full h-1.5 rounded-full appearance-none cursor-pointer ${isBelowMinimum ? 'accent-red-600' : 'accent-blue-600'} ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`}
+                            />
+                            <div className={`text-[9px] font-bold flex items-center justify-between ${isBelowMinimum ? 'text-red-500' : isDarkMode ? 'text-gray-600' : 'text-gray-500'}`}>
+                              <span>{lang === 'es' ? `Mínimo requerido: ${minHeight}% (${project.clips.length} clips)` : `Minimum required: ${minHeight}% (${project.clips.length} clips)`}</span>
+                              {isBelowMinimum && <span>⚠️ {lang === 'es' ? 'Fuera de marco' : 'Out of frame'}</span>}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="space-y-8">
@@ -957,41 +1071,64 @@ const App: React.FC = () => {
             </div>
 
             {/* Video Preview Container */}
-            <div className="w-full lg:w-[540px] p-10 lg:sticky lg:top-0 h-fit z-20 flex flex-col items-center">
-              <div ref={previewContainerRef} className="relative aspect-[9/16] rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full flex flex-col items-center justify-center select-none" style={{ backgroundColor: project.background }}>
+            <div className="w-full lg:w-[540px] p-10 lg:sticky lg:top-0 h-fit z-20 flex flex-col items-center gap-4">
+              {/* Preview Visual */}
+              <div ref={previewContainerRef} className="relative aspect-[9/16] rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full flex flex-col items-center justify-center select-none flex-shrink-0" style={{ backgroundColor: project.background }}>
                 <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
                   <div className="pointer-events-auto">{renderViralTitle()}</div>
+                  {activeClip && activeClip.title && (
+                    <div
+                      ref={clipTitleElementRef}
+                      onMouseDown={handleClipTitleDragStart}
+                      className={`absolute px-4 py-2 rounded-sm tracking-tighter pointer-events-auto cursor-move ${isDraggingClipTitle ? 'select-none' : ''} transition-transform duration-100`}
+                      style={{
+                        transform: `translate(${activeClip.clipTitlePosition?.x || 0}px, ${activeClip.clipTitlePosition?.y || 0}px)`,
+                        transition: isDraggingClipTitle ? 'none' : 'transform 0.1s ease-out'
+                      }}
+                    >
+                      {renderClipTitle()}
+                    </div>
+                  )}
                 </div>
                 <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
                   {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={activeClip.url} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
                 </div>
                 {(() => {
                   const layoutConfig = getClipLayoutConfig(project.clips.length);
+                  const fontSizeMap: Record<string, number> = { 'text-5xl': 64, 'text-4xl': 48, 'text-3xl': 30, 'text-2xl': 24 };
+                  const spacingMap: Record<string, number> = { 'space-y-8': 32, 'space-y-6': 24, 'space-y-4': 16, 'space-y-2': 8 };
+                  const fontSize = fontSizeMap[layoutConfig.rankFontSize] || 24;
+                  const spacing = spacingMap[layoutConfig.spacing] || 8;
+                  const scaleFactor = (project.videoHeight / 100);
                   return (
-                    <div className={`absolute left-10 ${layoutConfig.topPosition} ${layoutConfig.spacing} pointer-events-none z-50`}>
-                      {project.clips.map((c, i) => {
-                        const rankStyle = STYLE_PRESETS.find(s => s.id === (c.rankStyleId || 'BLUE_BOX')) || currentStyle;
-                        const titleStyle = STYLE_PRESETS.find(s => s.id === (c.titleStyleId || 'BLUE_BOX')) || currentStyle;
-                        const isItemActive = activeClipId === c.id;
-                        return (
-                          <div key={c.id} className={`flex items-center ${layoutConfig.containerGap} transition-all duration-500 ${isItemActive ? 'scale-125 opacity-100' : 'opacity-20 scale-90'}`}>
-                            <span className={`${layoutConfig.rankFontSize} font-black italic ${rankStyle.classes} ${rankStyle.shadow}`} style={{ WebkitTextStroke: isItemActive ? '1px black' : '0' }}>{c.rank}.</span>
-                            {isItemActive && <div className={`${layoutConfig.titleFontSize} px-4 py-1.5 rounded-sm shadow-2xl tracking-tighter truncate max-w-[140px] ${titleStyle.classes} ${titleStyle.shadow} ${titleStyle.id === 'ALERT' || titleStyle.id === 'BLUE_BOX' ? '' : 'bg-black/20 backdrop-blur-md border border-white/5'} ${c.titleItalic ? 'italic' : ''}`}>{c.title}</div>}
-                          </div>
-                        );
-                      })}
+                    <div className={`absolute left-10 top-[15%] pointer-events-none z-50 overflow-hidden transition-all duration-300`} style={{ maxHeight: `${140 * scaleFactor}px` }}>
+                      <div className={`flex flex-col transition-all duration-300`} style={{ gap: `${spacing * scaleFactor}px` }}>
+                        {project.clips.map((c, i) => {
+                          const rankStyle = STYLE_PRESETS.find(s => s.id === (c.rankStyleId || 'BLUE_BOX')) || currentStyle;
+                          const titleStyle = STYLE_PRESETS.find(s => s.id === (c.titleStyleId || 'BLUE_BOX')) || currentStyle;
+                          const isItemActive = activeClipId === c.id;
+                          return (
+                            <div key={c.id} className={`flex items-center transition-all duration-500 ${isItemActive ? 'scale-125 opacity-100' : 'opacity-20 scale-90'}`} style={{ gap: `${5 * scaleFactor}px` }}>
+                              <span className={`font-black italic ${rankStyle.classes} ${rankStyle.shadow}`} style={{ fontSize: `${fontSize * scaleFactor}px`, WebkitTextStroke: isItemActive ? '1px black' : '0' }}>{c.rank}.</span>
+                              {isItemActive && <div className={`px-4 py-1.5 rounded-sm shadow-2xl tracking-tighter truncate max-w-[140px] ${titleStyle.classes} ${titleStyle.shadow} ${titleStyle.id === 'ALERT' || titleStyle.id === 'BLUE_BOX' ? '' : 'bg-black/20 backdrop-blur-md border border-white/5'} ${c.titleItalic ? 'italic' : ''}`} style={{ fontSize: `${(fontSize * 0.35) * scaleFactor}px` }}>{c.title}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 })()}
-                <div className="absolute bottom-12 inset-x-0 px-8 z-50">
-                  <div className="bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[40px] p-2 flex flex-col gap-4 shadow-2xl">
-                    <div className="flex items-center justify-between px-6">
-                      <button onClick={() => { const prevIdx = (activeClipIndex - 1 + project.clips.length) % project.clips.length; if (project.clips[prevIdx]) setActiveClipId(project.clips[prevIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronLeft size={24} /></button>
-                      <button onClick={handleTogglePlay} className="p-4 bg-white text-black rounded-full shadow-2xl hover:scale-110 active:scale-90 transition-all">{isPlaying ? <PauseCircle size={28} fill="black" /> : <PlayCircle size={28} fill="black" />}</button>
-                      <button onClick={() => { const nextIdx = (activeClipIndex + 1) % project.clips.length; if (project.clips[nextIdx]) setActiveClipId(project.clips[nextIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronRight size={24} /></button>
-                    </div>
-                    <div className="px-6 pb-2"><div className="h-1 w-full bg-white/10 rounded-full relative overflow-hidden"><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%' }}></div></div></div>
+              </div>
+
+              {/* Control Panel - OUTSIDE Preview */}
+              <div className={`w-full rounded-2xl p-4 shadow-xl ${isDarkMode ? 'bg-[#0c0c0c] border border-white/5' : 'bg-gray-100 border border-gray-200'}`}>
+                <div className={`rounded-2xl p-3 flex flex-col gap-3 ${isDarkMode ? 'bg-black/60 backdrop-blur-3xl border border-white/10' : 'bg-white/60 backdrop-blur-xl border border-gray-300'}`}>
+                  <div className="flex items-center justify-between px-4">
+                    <button onClick={() => { const prevIdx = (activeClipIndex - 1 + project.clips.length) % project.clips.length; if (project.clips[prevIdx]) setActiveClipId(project.clips[prevIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronLeft size={24} /></button>
+                    <button onClick={handleTogglePlay} className="p-3 bg-white text-black rounded-full shadow-lg hover:scale-110 active:scale-90 transition-all">{isPlaying ? <PauseCircle size={24} fill="black" /> : <PlayCircle size={24} fill="black" />}</button>
+                    <button onClick={() => { const nextIdx = (activeClipIndex + 1) % project.clips.length; if (project.clips[nextIdx]) setActiveClipId(project.clips[nextIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronRight size={24} /></button>
                   </div>
+                  <div className="px-4"><div className={`h-1.5 w-full rounded-full relative overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-black/10'}`}><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%' }}></div></div></div>
                 </div>
               </div>
             </div>

@@ -11,6 +11,7 @@ export interface Clip {
   rankStyleId?: string;
   titleStyleId?: string;
   titleItalic?: boolean;
+  clipTitlePosition?: { x: number, y: number };
 }
 
 export interface CaptionStyle {
