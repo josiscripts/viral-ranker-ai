@@ -10,17 +10,36 @@ const router = Router();
 
 // POST /api/export - Start export job
 router.post('/export', async (req: Request, res: Response) => {
+  console.log('=== INCOMING EXPORT REQUEST ===');
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('Headers:', req.headers);
+  console.log('===================================');
+
   try {
+    console.log('DEBUG: POST /api/export received:', {
+      body: req.body,
+      projectId: req.body?.projectId,
+      title: req.body?.title,
+      titlePosition: req.body?.titlePosition,
+      titleStroke: req.body?.titleStroke,
+      clipsCount: req.body?.clips?.length,
+      clipsFields: req.body?.clips?.[0] ? Object.keys(req.body.clips[0]) : 'none'
+    });
+
     const { projectId, title, titlePosition, titleStroke, clips } = req.body as ExportRequest;
 
     // Validate input
+    console.log('DEBUG: Validation checks - projectId:', !!projectId, 'title:', !!title, 'titlePosition:', !!titlePosition, 'clips:', clips?.length);
+
     if (!projectId || !title || !titlePosition || !clips || clips.length === 0) {
+      console.log('DEBUG: Missing required fields validation failed');
       return res.status(400).json({
         error: 'Missing required fields: projectId, title, titlePosition, clips'
       });
     }
 
     if (clips.length > 10) {
+      console.log('DEBUG: Too many clips:', clips.length);
       return res.status(400).json({
         error: 'Too many clips (maximum 10)'
       });
@@ -28,12 +47,23 @@ router.post('/export', async (req: Request, res: Response) => {
 
     // Validate clips
     for (const clip of clips) {
+      console.log('DEBUG: Validating clip:', {
+        id: clip.id,
+        url: clip.url ? 'exists' : 'missing',
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        rank: clip.rank,
+        title: clip.title
+      });
+
       if (!clip.url || clip.startTime === undefined || clip.endTime === undefined) {
+        console.log('DEBUG: Clip validation failed - missing url/startTime/endTime');
         return res.status(400).json({
           error: 'Each clip must have url, startTime, and endTime'
         });
       }
       if (clip.startTime >= clip.endTime) {
+        console.log(`DEBUG: Clip "${clip.title}" validation failed - startTime >= endTime`);
         return res.status(400).json({
           error: `Clip "${clip.title}": startTime must be less than endTime`
         });

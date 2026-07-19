@@ -505,6 +505,22 @@ const App: React.FC = () => {
         }))
       };
 
+      console.log('DEBUG: Exporting with data:', {
+        projectId: exportRequest.projectId,
+        title: exportRequest.title,
+        titlePosition: exportRequest.titlePosition,
+        titleStroke: exportRequest.titleStroke,
+        clipsCount: exportRequest.clips.length,
+        clips: exportRequest.clips.map((c: any) => ({
+          id: c.id,
+          url: c.url.substring(0, 50) + '...',
+          startTime: c.startTime,
+          endTime: c.endTime,
+          rank: c.rank,
+          title: c.title
+        }))
+      });
+
       // Step 1: Create export job
       const createResponse = await fetch('http://localhost:3001/api/export', {
         method: 'POST',

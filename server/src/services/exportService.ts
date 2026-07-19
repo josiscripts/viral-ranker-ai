@@ -41,9 +41,15 @@ export interface ExportRequest {
   }[];
 }
 
-const STORAGE_BASE = path.join(process.cwd(), 'storage');
+// Use absolute path from server root
+const STORAGE_BASE = path.join(__dirname, '..', '..', 'storage');
 const PROCESSING_DIR = path.join(STORAGE_BASE, 'processing');
 const EXPORTS_DIR = path.join(STORAGE_BASE, 'exports');
+
+console.log('DEBUG: Storage paths configured:');
+console.log('  STORAGE_BASE:', STORAGE_BASE);
+console.log('  PROCESSING_DIR:', PROCESSING_DIR);
+console.log('  EXPORTS_DIR:', EXPORTS_DIR);
 const JOB_CLEANUP_INTERVAL = 60 * 1000; // 1 minute check
 const JOB_EXPIRE_TIME = 60 * 60 * 1000; // 1 hour expiry
 
@@ -117,10 +123,14 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
 
   try {
     const jobDir = path.join(PROCESSING_DIR, jobId);
+    console.log(`\n=== STARTING EXPORT JOB ${jobId} ===`);
+    console.log('Job directory:', jobDir);
     ensureDirectoryExists(jobDir);
+    console.log('Job directory created successfully');
 
     // Sort clips by rank
     const sortedClips = [...request.clips].sort((a, b) => a.rank - b.rank);
+    console.log(`Processing ${sortedClips.length} clips in order`);
 
     // Step 1: Trim and overlay text for each clip
     const processedClips: string[] = [];
@@ -148,6 +158,14 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
         ? clip.url
         : path.join(STORAGE_BASE, clip.url);
 
+      console.log(`\nProcessing clip ${i + 1}/${sortedClips.length}:`);
+      console.log('  Rank:', clip.rank);
+      console.log('  Title:', clip.title);
+      console.log('  Input URL:', clipUrl);
+      console.log('  Trimmed output:', trimmedPath);
+      console.log('  Final output:', finalPath);
+      console.log('  Trim range: [', clip.startTime, '-', clip.endTime, ']');
+
       // Trim the clip
       await trimClip({
         inputPath: clipUrl,
@@ -155,6 +173,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
         startTime: clip.startTime,
         endTime: clip.endTime
       });
+      console.log('  ✓ Trim completed');
 
       // Add text overlay
       await addTextOverlay({
