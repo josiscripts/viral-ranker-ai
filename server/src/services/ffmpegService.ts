@@ -32,16 +32,18 @@ interface ConcatOptions {
 export async function trimClip(options: TrimOptions): Promise<void> {
   const { inputPath, outputPath, startTime, endTime } = options;
 
+  console.log('DEBUG trimClip: outputPath =', outputPath);
+
   const cmd = [
     'ffmpeg',
-    '-i', inputPath,
+    '-i', `"${inputPath}"`,
     '-ss', startTime.toString(),
     '-to', endTime.toString(),
     '-c:v', 'libx264',
     '-preset', 'medium',
     '-c:a', 'aac',
     '-y', // overwrite output
-    outputPath
+    `"${outputPath}"`
   ].join(' ');
 
   return new Promise((resolve, reject) => {
