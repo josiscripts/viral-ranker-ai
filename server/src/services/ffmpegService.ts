@@ -88,15 +88,19 @@ export async function addTextOverlay(options: DrawTextOptions): Promise<void> {
     filterComplex += `,drawtext=text='${escapedClipTitle}':x=${clipTitleX}:y=${clipTitleY}:fontsize=32:fontcolor=${cleanClipColor}:borderw=${clipTitleStroke || mainTitleStroke}:bordercolor=black`;
   }
 
+  console.log('DEBUG addTextOverlay: inputPath =', inputPath);
+  console.log('DEBUG addTextOverlay: outputPath =', outputPath);
+  console.log('DEBUG addTextOverlay: filterComplex =', filterComplex);
+
   const cmd = [
     'ffmpeg',
-    '-i', inputPath,
-    '-vf', filterComplex,
+    '-i', `"${inputPath}"`,
+    '-vf', `"${filterComplex}"`,
     '-c:v', 'libx264',
     '-preset', 'medium',
     '-c:a', 'aac',
     '-y',
-    outputPath
+    `"${outputPath}"`
   ].join(' ');
 
   return new Promise((resolve, reject) => {
