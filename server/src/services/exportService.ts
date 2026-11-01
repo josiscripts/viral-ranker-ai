@@ -12,12 +12,22 @@ import {
 import { resolveAssetPath } from './videoService';
 import { STORAGE_DIR, PROCESSING_DIR, EXPORTS_DIR } from '../config';
 
+// Machine-readable step, so the client can show it in the user's language
+export type ExportStepKey = 'queued' | 'processingClip' | 'concatenating' | 'cleaningUp' | 'completed';
+
+export interface ExportStep {
+  key: ExportStepKey;
+  clip?: number; // 1-based
+  total?: number;
+}
+
 export interface ExportJob {
   jobId: string;
   projectId: string;
   status: 'queued' | 'processing' | 'completed' | 'error';
   progress: number; // 0-100
   currentStep: string;
+  step: ExportStep;
   error?: string;
   downloadUrl?: string;
   createdAt: Date;
@@ -70,6 +80,7 @@ export function createExportJob(projectId: string): string {
     status: 'queued',
     progress: 0,
     currentStep: 'Queued',
+    step: { key: 'queued' },
     createdAt: now,
     updatedAt: now,
     expiresAt: new Date(now.getTime() + JOB_EXPIRE_TIME)
@@ -93,9 +104,11 @@ export function getExportFilePath(jobId: string): string | null {
   return fs.existsSync(filePath) ? filePath : null;
 }
 
-export function updateJobProgress(jobId: string, progress: number, currentStep: string): void {
+export function updateJobProgress(jobId: string, progress: number, currentStep: string, step: ExportStep): void {
   const job = jobs.get(jobId);
   if (job) {
+    job.status = 'processing';
+    job.step = step;
     job.progress = Math.min(100, Math.max(0, progress));
     job.currentStep = currentStep;
     job.updatedAt = new Date();
@@ -108,6 +121,7 @@ export function completeJob(jobId: string, downloadUrl: string): void {
     job.status = 'completed';
     job.progress = 100;
     job.currentStep = 'Export completed';
+    job.step = { key: 'completed' };
     job.downloadUrl = downloadUrl;
     job.updatedAt = new Date();
   }
@@ -146,7 +160,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
 
     for (let i = 0; i < sortedClips.length; i++) {
       const clip = sortedClips[i];
-      updateJobProgress(jobId, (i / totalClips) * 60, `Processing clip ${i + 1}/${totalClips}`);
+      updateJobProgress(jobId, (i / totalClips) * 60, `Processing clip ${i + 1}/${totalClips}`, { key: 'processingClip', clip: i + 1, total: totalClips });
 
       // Map pixel positions from 540px preview to 1080px video
       const mainTitleX = Math.round((request.titlePosition.x / 540) * 1080);
@@ -207,7 +221,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     }
 
     // Step 2: Concatenate all clips
-    updateJobProgress(jobId, 70, 'Concatenating clips');
+    updateJobProgress(jobId, 70, 'Concatenating clips', { key: 'concatenating' });
 
     const outputPath = path.join(EXPORTS_DIR, `${jobId}.mp4`);
     await concatenateClips({
@@ -216,7 +230,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     });
 
     // Step 3: Clean up processing directory
-    updateJobProgress(jobId, 90, 'Cleaning up');
+    updateJobProgress(jobId, 90, 'Cleaning up', { key: 'cleaningUp' });
     processedClips.forEach(deleteFile);
     deleteDirectory(jobDir);
 

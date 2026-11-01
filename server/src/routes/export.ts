@@ -158,6 +158,7 @@ router.get('/export/:jobId', (req: Request, res: Response) => {
       status: job.status,
       progress: job.progress,
       currentStep: job.currentStep,
+      step: job.step,
       error: job.error,
       downloadUrl: job.downloadUrl
     });

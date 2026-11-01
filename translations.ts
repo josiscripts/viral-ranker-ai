@@ -93,6 +93,23 @@ export const translations = {
     errorBoundaryTitle: "Something went wrong",
     errorBoundaryDesc: "The editor hit an unexpected error. Your saved projects are still stored in this browser.",
     errorBoundaryReload: "Reload app",
+
+    // Export progress and errors ({n} = clip number, {total} = clip count)
+    exportStepQueued: "Waiting to start...",
+    exportStepClip: "Processing clip {n} of {total}",
+    exportStepConcat: "Joining clips",
+    exportStepCleanup: "Finishing",
+    exportStepDone: "Done",
+    exportErrorTitle: "Export failed",
+    exportErrorNoClips: "Add at least one clip before exporting.",
+    exportErrorValidation: "Fix these clips before exporting:",
+    exportErrorMissingVideo: "Clip {n}: no video loaded",
+    exportErrorInvalidTrim: "Clip {n}: the start must be before the end",
+    exportErrorServer: "The server could not finish the export:",
+    exportErrorNetwork: "Could not reach the server. Make sure the backend is running.",
+    exportErrorTimeout: "The export took too long. The server may be busy.",
+    exportRetry: "Retry",
+    exportDismiss: "Close",
   },
   es: {
     // Navigation / Sidebar
@@ -188,5 +205,22 @@ export const translations = {
     errorBoundaryTitle: "Algo salió mal",
     errorBoundaryDesc: "El editor encontró un error inesperado. Tus proyectos guardados siguen almacenados en este navegador.",
     errorBoundaryReload: "Recargar aplicación",
+
+    // Progreso y errores del export ({n} = número de clip, {total} = número de clips)
+    exportStepQueued: "Esperando para empezar...",
+    exportStepClip: "Procesando clip {n} de {total}",
+    exportStepConcat: "Uniendo clips",
+    exportStepCleanup: "Finalizando",
+    exportStepDone: "Listo",
+    exportErrorTitle: "La exportación falló",
+    exportErrorNoClips: "Agrega al menos un clip antes de exportar.",
+    exportErrorValidation: "Corrige estos clips antes de exportar:",
+    exportErrorMissingVideo: "Clip {n}: no tiene video cargado",
+    exportErrorInvalidTrim: "Clip {n}: el inicio debe ser anterior al final",
+    exportErrorServer: "El servidor no pudo terminar la exportación:",
+    exportErrorNetwork: "No se pudo conectar con el servidor. Comprueba que el backend esté en marcha.",
+    exportErrorTimeout: "La exportación tardó demasiado. El servidor puede estar muy ocupado.",
+    exportRetry: "Reintentar",
+    exportDismiss: "Cerrar",
   }
 };

@@ -51,9 +51,10 @@ import {
   LayoutDashboard, 
   Zap, 
   Layers, 
+  X,
   Type as TypeIconComponent
 } from 'lucide-react';
-import { Clip, Project, UserProfile } from './types';
+import { Clip, Project, UserProfile, ExportErrorInfo, ExportStep, ExportValidationIssue } from './types';
 import { generateRankingScript } from './services/geminiService';
 import ProfileView from './ProfileView';
 import { translations } from './translations';
@@ -173,6 +174,25 @@ const getClipAssetId = (clip: Clip): string | undefined => {
   }
 };
 
+// Clips the server would reject, checked before anything is sent
+const getExportIssues = (clips: Clip[]): ExportValidationIssue[] =>
+  clips.flatMap((clip, index): ExportValidationIssue[] => {
+    if (!getClipAssetId(clip)) return [{ clipNumber: index + 1, reason: 'missingVideo' }];
+    const validTrim = Number.isFinite(clip.startTime) && Number.isFinite(clip.endTime)
+      && clip.startTime >= 0 && clip.startTime < clip.endTime;
+    return validTrim ? [] : [{ clipNumber: index + 1, reason: 'invalidTrim' }];
+  });
+
+// Carries the kind of failure from the export flow to the error banner
+class ExportFailure extends Error {
+  info: ExportErrorInfo;
+
+  constructor(info: ExportErrorInfo) {
+    super(info.message || info.kind);
+    this.info = info;
+  }
+}
+
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Creator',
   email: '',
@@ -281,7 +301,8 @@ const App: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportJobId, setExportJobId] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<ExportErrorInfo | null>(null);
+  const [exportStep, setExportStep] = useState<ExportStep | null>(null);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [isPlaying, setIsPlaying] = useState(true);
@@ -500,15 +521,63 @@ const App: React.FC = () => {
     setActiveTab('editor');
   };
 
+  const formatExportStep = (step: ExportStep) => {
+    switch (step.key) {
+      case 'processingClip':
+        return t.exportStepClip.replace('{n}', String(step.clip ?? '')).replace('{total}', String(step.total ?? ''));
+      case 'concatenating':
+        return t.exportStepConcat;
+      case 'cleaningUp':
+        return t.exportStepCleanup;
+      case 'completed':
+        return t.exportStepDone;
+      default:
+        return t.exportStepQueued;
+    }
+  };
+
+  const getExportErrorLines = (error: ExportErrorInfo): string[] => {
+    switch (error.kind) {
+      case 'noClips':
+        return [t.exportErrorNoClips];
+      case 'validation':
+        return [t.exportErrorValidation, ...(error.issues || []).map(issue =>
+          (issue.reason === 'missingVideo' ? t.exportErrorMissingVideo : t.exportErrorInvalidTrim).replace('{n}', String(issue.clipNumber))
+        )];
+      case 'network':
+        return [t.exportErrorNetwork];
+      case 'timeout':
+        return [t.exportErrorTimeout];
+      default:
+        return error.message ? [t.exportErrorServer, error.message] : [t.exportErrorServer];
+    }
+  };
+
   const handleExport = async () => {
+    setExportError(null);
     if (project.clips.length === 0) {
-      setExportError('No clips to export');
+      setExportError({ kind: 'noClips' });
+      return;
+    }
+    const issues = getExportIssues(project.clips);
+    if (issues.length > 0) {
+      setExportError({ kind: 'validation', issues });
       return;
     }
 
     setIsExporting(true);
     setExportProgress(0);
-    setExportError(null);
+    setExportStep({ key: 'queued' });
+
+    const readServerError = async (response: Response) => {
+      try {
+        const data = await response.json();
+        if (typeof data.error === 'string') return data.error;
+      } catch (e) {
+        // Body is not JSON
+      }
+      return `HTTP ${response.status}`;
+    };
 
     try {
       // Prepare export request with all project data
@@ -545,83 +614,78 @@ const App: React.FC = () => {
         }))
       });
 
-      // Step 1: Create export job
-      const createResponse = await fetch('http://localhost:3001/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
-        body: JSON.stringify(exportRequest)
-      });
-
+      // Step 1: Create export job (fetch only rejects when the server is unreachable)
+      let createResponse: Response;
+      try {
+        createResponse = await fetch('http://localhost:3001/api/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
+          body: JSON.stringify(exportRequest)
+        });
+      } catch (e) {
+        throw new ExportFailure({ kind: 'network' });
+      }
       if (!createResponse.ok) {
-        const errorData = await createResponse.json();
-        throw new Error(errorData.error || 'Failed to start export');
+        throw new ExportFailure({ kind: 'server', message: await readServerError(createResponse) });
       }
 
       const { jobId } = await createResponse.json();
       setExportJobId(jobId);
 
       // Step 2: Poll for job status every 500ms (max 600 attempts = 5 minutes)
-      let completed = false;
-      let lastError: string | null = null;
-      const MAX_RETRIES = 600;
-      let retries = 0;
-
-      while (!completed && !lastError && retries < MAX_RETRIES) {
+      const MAX_POLLS = 600;
+      for (let poll = 0; ; poll++) {
+        if (poll >= MAX_POLLS) throw new ExportFailure({ kind: 'timeout' });
         await new Promise(resolve => setTimeout(resolve, 500));
-        retries++;
 
+        let statusResponse: Response;
         try {
-          const statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`, {
+          statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`, {
             signal: AbortSignal.timeout(5000)
           });
-          if (!statusResponse.ok) {
-            throw new Error(`Backend returned ${statusResponse.status}: ${statusResponse.statusText}`);
-          }
-
-          const status = await statusResponse.json();
-          setExportProgress(status.progress);
-
-          if (status.status === 'completed') {
-            completed = true;
-            // Download the file
-            const link = document.createElement('a');
-            link.href = `http://localhost:3001${status.downloadUrl}`;
-            link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          } else if (status.status === 'error') {
-            const jobError: string = status.error || 'Unknown export error';
-            lastError = jobError;
-            throw new Error(jobError);
-          }
-        } catch (pollError) {
-          const pollMessage = pollError instanceof Error ? pollError.message : 'Unknown error';
-          if (pollMessage.includes('AbortError') || pollMessage.includes('timeout')) {
-            // Timeout on this request, but continue polling
-            continue;
-          }
-          throw new Error(`Export status check failed: ${pollMessage}`);
+        } catch (e) {
+          // A slow status response is retried on the next poll
+          if (e instanceof DOMException && e.name === 'TimeoutError') continue;
+          throw new ExportFailure({ kind: 'network' });
         }
-      }
+        if (!statusResponse.ok) {
+          throw new ExportFailure({ kind: 'server', message: await readServerError(statusResponse) });
+        }
 
-      // Check if we hit max retries
-      if (retries >= MAX_RETRIES && !completed) {
-        throw new Error('Exportación tardó demasiado. El servidor puede estar muy ocupado.');
+        const status = await statusResponse.json();
+        setExportProgress(status.progress);
+        if (status.step) setExportStep(status.step);
+
+        if (status.status === 'error') {
+          throw new ExportFailure({ kind: 'server', message: status.error || undefined });
+        }
+        if (status.status === 'completed') {
+          // Download the file
+          const link = document.createElement('a');
+          link.href = `http://localhost:3001${status.downloadUrl}`;
+          link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          break;
+        }
       }
 
       // Success - keep progress bar visible for a moment
       setTimeout(() => {
         setIsExporting(false);
         setExportProgress(0);
+        setExportStep(null);
         setExportJobId(null);
       }, 1500);
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Export failed';
-      setExportError(errorMessage);
+      setExportError(error instanceof ExportFailure
+        ? error.info
+        : { kind: 'server', message: error instanceof Error ? error.message : undefined });
       setIsExporting(false);
       setExportProgress(0);
+      setExportStep(null);
       setExportJobId(null);
     }
   };
@@ -797,10 +861,36 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-10">
           <div className="max-w-md w-full text-center space-y-10">
             <Film size={64} className="text-blue-500 mx-auto animate-pulse" />
-            <h2 className="text-4xl font-black text-white uppercase tracking-tighter">Encoding...</h2>
+            <h2 className="text-4xl font-black text-white uppercase tracking-tighter">{t.exportingBtn}</h2>
             <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden border border-white/10 shadow-[0_0_20px_rgba(37,99,235,0.2)]">
               <div className="h-full bg-blue-600 transition-all duration-300 shadow-[0_0_15px_rgba(37,99,235,0.8)]" style={{ width: `${exportProgress}%` }}></div>
             </div>
+            <p className="text-sm font-bold text-gray-400 tracking-tight">
+              {exportStep ? formatExportStep(exportStep) : t.exportStepQueued} · {Math.round(exportProgress)}%
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Export error banner */}
+      {exportError && !isExporting && (
+        <div role="alert" className={`fixed top-6 left-1/2 -translate-x-1/2 z-[110] w-[calc(100%-2rem)] max-w-lg rounded-[24px] border p-6 shadow-2xl ${isDarkMode ? 'bg-[#1a1a1a] border-red-500/30' : 'bg-white border-red-200'}`}>
+          <div className="flex items-start gap-4">
+            <AlertCircle size={24} className="text-red-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0 space-y-2">
+              <h3 className={`text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{t.exportErrorTitle}</h3>
+              {getExportErrorLines(exportError).map((line, index) => (
+                <p key={index} className={`text-sm font-medium break-words ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>{line}</p>
+              ))}
+            </div>
+            <button onClick={() => setExportError(null)} aria-label={t.exportDismiss} title={t.exportDismiss} className={`p-2 rounded-xl transition-all ${isDarkMode ? 'text-gray-500 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="flex justify-end mt-4">
+            <button onClick={handleExport} className="px-6 py-2.5 bg-blue-600 text-white rounded-2xl text-xs font-black inline-flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all">
+              <RotateCcw size={14} /> {t.exportRetry}
+            </button>
           </div>
         </div>
       )}

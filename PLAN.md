@@ -331,7 +331,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | Paso | Tarea | Estado |
 |---|---|---|
 | B | Tipado del frontend (`@types/react`) | ✅ |
-| 1 | P1-01 Mostrar errores de exportación | 🔲 |
+| 1 | P1-01 Mostrar errores de exportación | ✅ |
 | 2 | P1-07 Cliente API, proxy de Vite y build del servidor | 🔲 |
 | 3 | P1-05 Entrada de URL robusta | 🔲 |
 | 4 | P1-06 Descargas de mejor calidad | 🔲 |
@@ -356,6 +356,31 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   Se quitó de `ErrorBoundary.tsx` el `declare props`, que ya no hace falta.
 - **Archivos:** `package.json`, `package-lock.json`, `App.tsx`, `ProfileView.tsx`, `ErrorBoundary.tsx`.
 - **Pruebas:** `tsc --noEmit` (normal y `--strict`) da 0 errores; `tsc` del servidor da 0 errores; `vite build` OK. `strict` no se activó en `tsconfig.json` (eso es P3-02).
+
+**Base de tests (sin dependencias nuevas)** ✅
+- **Problema:** no había tests automatizados; todo P0 se había verificado a mano.
+- **Solución:**
+  - `server/tests/`: `node:test` + `ts-node`, contra un servidor real en un puerto aleatorio con `STORAGE_DIR` temporal. Los vídeos de prueba se generan con ffmpeg (`lavfi`), así que no hay binarios en el repo. `api.test.ts` cubre las regresiones de P0: 403 sin cabecera, upload no-vídeo y nombre hostil, URLs falsas, payloads de export maliciosos, traversal en la ruta de descarga y un export real con títulos hostiles.
+  - `tests/e2e/`: `node:test` + `playwright` (ya instalado), con Chromium en un perfil limpio (no toca los datos del navegador del usuario) y un backend propio con almacenamiento temporal. Si ya hay un Vite de este repo en `:3000`, lo reutiliza y no lo detiene.
+  - Para aislar el almacenamiento, `server/src/config.ts` centraliza las rutas (`STORAGE_DIR`, por defecto `server/storage`). Antes unas usaban `process.cwd()` y otras `__dirname` (adelanta P3-07). `index.ts` carga `.env` antes que el resto de módulos (`import 'dotenv/config'`).
+- **Archivos:** `server/src/config.ts` (nuevo), `server/src/index.ts`, `server/src/services/{downloadService,videoService,exportService}.ts`, `server/tests/*` (nuevo), `server/package.json` (`npm test`), `tests/e2e/helpers.mjs` (nuevo), `package.json` (`npm run test:e2e`).
+- **Pruebas:** `npm test` en `server/` da 8/8 en unos 14 s. `server/storage` queda intacto (42 uploads antes y después) y no quedan directorios temporales.
+
+**P1-01 — Mostrar los errores de exportación** ✅
+- **Error original (E-02), reproducido:** con el test e2e nuevo, ninguno de los 4 casos de fallo mostraba nada (clip sin vídeo, trim inválido, rechazo del servidor, servidor caído). `exportError` se guardaba pero no se pintaba, y el overlay decía "Encoding..." sin el paso actual. Además, el servidor nunca pasaba el job a `processing`.
+- **Solución:**
+  - Antes de enviar se valida en el cliente: clips sin vídeo y trims inválidos, con número de clip.
+  - Un banner `role="alert"` (ES/EN, modo claro y oscuro) muestra el motivo, el mensaje del servidor si lo hay, "Reintentar" y "Cerrar".
+  - Los errores se distinguen por tipo: validación, servidor, red y tiempo agotado.
+  - El servidor devuelve `step` (clave + clip/total) y marca `processing`, y el overlay muestra el paso traducido y el porcentaje.
+  - Se rehízo el polling: un error del job ya no se envuelve como "status check failed".
+- **Archivos:** `App.tsx`, `types.ts` (`ExportStep`, `ExportErrorInfo`, `ExportValidationIssue`), `translations.ts`, `server/src/services/exportService.ts`, `server/src/routes/export.ts`, `tests/e2e/export-errors.test.mjs` (nuevo).
+- **Pruebas:** `npm run test:e2e` da 5/5:
+  - clip sin vídeo y trim inválido (este en la UI en español): mensaje visible y 0 peticiones;
+  - rechazo del servidor: muestra el mensaje del servidor;
+  - servidor caído: mensaje visible, y "Reintentar" exporta y descarga;
+  - export correcto: muestra "Processing clip N of 2" y descarga.
+  También hay capturas del banner en tema claro y oscuro. `npm test` del servidor da 8/8 y `tsc` (frontend `--strict` y servidor) da 0 errores.
 
 ---
 

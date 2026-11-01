@@ -64,3 +64,25 @@ export interface UserProfile {
   };
 }
 
+
+// Export progress step reported by GET /api/export/:jobId
+export type ExportStepKey = 'queued' | 'processingClip' | 'concatenating' | 'cleaningUp' | 'completed';
+
+export interface ExportStep {
+  key: ExportStepKey;
+  clip?: number; // 1-based
+  total?: number;
+}
+
+// A clip the client refuses to export; clipNumber is 1-based, as shown in the editor
+export interface ExportValidationIssue {
+  clipNumber: number;
+  reason: 'missingVideo' | 'invalidTrim';
+}
+
+// Why an export failed. `message` is the server's own text, shown as a detail.
+export interface ExportErrorInfo {
+  kind: 'noClips' | 'validation' | 'server' | 'network' | 'timeout';
+  issues?: ExportValidationIssue[];
+  message?: string;
+}
