@@ -1,15 +1,15 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import {
   trimClip,
   addTextOverlay,
   concatenateClips,
   ensureDirectoryExists,
   deleteFile,
-  deleteDirectory,
-  getVideoDuration
+  deleteDirectory
 } from './ffmpegService';
+import { resolveAssetPath } from './videoService';
 
 export interface ExportJob {
   jobId: string;
@@ -31,7 +31,9 @@ export interface ExportRequest {
   titleStroke: number;
   clips: {
     id: string;
-    url: string;
+    // Stored file name returned by /api/upload or /api/download. The server only
+    // processes files from its own upload directory, never client URLs or paths.
+    assetId: string;
     startTime: number;
     endTime: number;
     rank: number;
@@ -63,7 +65,7 @@ ensureDirectoryExists(EXPORTS_DIR);
 setInterval(cleanupExpiredJobs, JOB_CLEANUP_INTERVAL);
 
 export function createExportJob(projectId: string): string {
-  const jobId = uuidv4();
+  const jobId = randomUUID();
   const now = new Date();
 
   const job: ExportJob = {
@@ -83,6 +85,16 @@ export function createExportJob(projectId: string): string {
 
 export function getJob(jobId: string): ExportJob | undefined {
   return jobs.get(jobId);
+}
+
+// Path of the finished export for a known, completed job. The file name is always
+// rebuilt from the server-generated job id, never taken from the request.
+export function getExportFilePath(jobId: string): string | null {
+  const job = jobs.get(jobId);
+  if (!job || job.status !== 'completed') return null;
+
+  const filePath = path.join(EXPORTS_DIR, `${job.jobId}.mp4`);
+  return fs.existsSync(filePath) ? filePath : null;
 }
 
 export function updateJobProgress(jobId: string, progress: number, currentStep: string): void {
@@ -142,21 +154,21 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
 
       // Map pixel positions from 540px preview to 1080px video
       const mainTitleX = Math.round((request.titlePosition.x / 540) * 1080);
-      const mainTitleY = Math.round((request.titlePosition.y / 1920) * 1920);
+      const mainTitleY = Math.round((request.titlePosition.y / 540) * 1920) + 960;      
       const clipTitleX = clip.clipTitlePosition
         ? Math.round((clip.clipTitlePosition.x / 540) * 1080)
         : mainTitleX;
       const clipTitleY = clip.clipTitlePosition
-        ? Math.round((clip.clipTitlePosition.y / 1920) * 1920)
+        ? Math.round((clip.clipTitlePosition.y / 540) * 1920)
         : mainTitleY + 100;
 
       const trimmedPath = path.join(jobDir, `clip_${i}_trimmed.mp4`);
       const finalPath = path.join(jobDir, `clip_${i}_final.mp4`);
 
-      // Extract URL (could be local file path)
-      const clipUrl = clip.url.startsWith('http')
-        ? clip.url
-        : path.join(STORAGE_BASE, clip.url);
+      const clipUrl = resolveAssetPath(clip.assetId);
+      if (!clipUrl) {
+        throw new Error(`Video file for clip "${clip.title}" was not found on the server`);
+      }
 
       console.log(`\nProcessing clip ${i + 1}/${sortedClips.length}:`);
       console.log('  Rank:', clip.rank);
@@ -179,6 +191,8 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
       await addTextOverlay({
         inputPath: trimmedPath,
         outputPath: finalPath,
+        workDir: jobDir,
+        textFilePrefix: `clip_${i}`,
         mainTitle: request.title,
         mainTitleX,
         mainTitleY,
@@ -211,7 +225,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     deleteDirectory(jobDir);
 
     // Complete job
-    const downloadUrl = `/api/files/${jobId}.mp4`;
+    const downloadUrl = `/api/export/${jobId}/file`;
     completeJob(jobId, downloadUrl);
 
   } catch (error) {

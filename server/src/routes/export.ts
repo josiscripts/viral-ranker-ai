@@ -2,11 +2,31 @@ import { Router, Request, Response } from 'express';
 import {
   createExportJob,
   getJob,
+  getExportFilePath,
   processExportJob,
   ExportRequest
 } from '../services/exportService';
+import { resolveAssetPath } from '../services/videoService';
 
 const router = Router();
+
+const MAX_TITLE_LENGTH = 100;
+const MAX_TITLE_STROKE = 8;
+const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Control characters are rejected; a line break is allowed because the main title can span lines
+const FORBIDDEN_TITLE_CHARS = /[\u0000-\u0009\u000B-\u001F\u007F]/;
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const isValidPosition = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const position = value as { x?: unknown; y?: unknown };
+  return isFiniteNumber(position.x) && isFiniteNumber(position.y);
+};
+
+const isValidTitle = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MAX_TITLE_LENGTH && !FORBIDDEN_TITLE_CHARS.test(value);
 
 // POST /api/export - Start export job
 router.post('/export', async (req: Request, res: Response) => {
@@ -31,7 +51,7 @@ router.post('/export', async (req: Request, res: Response) => {
     // Validate input
     console.log('DEBUG: Validation checks - projectId:', !!projectId, 'title:', !!title, 'titlePosition:', !!titlePosition, 'clips:', clips?.length);
 
-    if (!projectId || !title || !titlePosition || !clips || clips.length === 0) {
+    if (!projectId || !title || !titlePosition || !Array.isArray(clips) || clips.length === 0) {
       console.log('DEBUG: Missing required fields validation failed');
       return res.status(400).json({
         error: 'Missing required fields: projectId, title, titlePosition, clips'
@@ -45,21 +65,53 @@ router.post('/export', async (req: Request, res: Response) => {
       });
     }
 
+    if (typeof projectId !== 'string' || !isValidTitle(title) || !isValidPosition(titlePosition)) {
+      return res.status(400).json({
+        error: `Invalid project data: title must be text of at most ${MAX_TITLE_LENGTH} characters and titlePosition must have numeric x/y`
+      });
+    }
+
+    if (titleStroke !== undefined && (!Number.isInteger(titleStroke) || titleStroke < 0 || titleStroke > MAX_TITLE_STROKE)) {
+      return res.status(400).json({
+        error: `titleStroke must be an integer between 0 and ${MAX_TITLE_STROKE}`
+      });
+    }
+
     // Validate clips
     for (const clip of clips) {
       console.log('DEBUG: Validating clip:', {
-        id: clip.id,
-        url: clip.url ? 'exists' : 'missing',
-        startTime: clip.startTime,
-        endTime: clip.endTime,
-        rank: clip.rank,
-        title: clip.title
+        id: clip?.id,
+        assetId: clip?.assetId,
+        startTime: clip?.startTime,
+        endTime: clip?.endTime,
+        rank: clip?.rank,
+        title: clip?.title
       });
 
-      if (!clip.url || clip.startTime === undefined || clip.endTime === undefined) {
-        console.log('DEBUG: Clip validation failed - missing url/startTime/endTime');
+      if (!clip || typeof clip !== 'object' || !isFiniteNumber(clip.startTime) || !isFiniteNumber(clip.endTime) || !isFiniteNumber(clip.rank)) {
+        console.log('DEBUG: Clip validation failed - missing assetId/startTime/endTime/rank');
         return res.status(400).json({
-          error: 'Each clip must have url, startTime, and endTime'
+          error: 'Each clip must have assetId, numeric startTime, endTime and rank'
+        });
+      }
+      if (!isValidTitle(clip.title)) {
+        return res.status(400).json({
+          error: `Clip titles must be text of at most ${MAX_TITLE_LENGTH} characters`
+        });
+      }
+      if (clip.clipTitlePosition !== undefined && !isValidPosition(clip.clipTitlePosition)) {
+        return res.status(400).json({
+          error: `Clip "${clip.title}": clipTitlePosition must have numeric x/y`
+        });
+      }
+      if (!resolveAssetPath(clip.assetId)) {
+        return res.status(400).json({
+          error: `Clip "${clip.title}" has no uploaded or downloaded video on the server`
+        });
+      }
+      if (clip.startTime < 0) {
+        return res.status(400).json({
+          error: `Clip "${clip.title}": startTime cannot be negative`
         });
       }
       if (clip.startTime >= clip.endTime) {
@@ -116,6 +168,22 @@ router.get('/export/:jobId', (req: Request, res: Response) => {
       error: 'Failed to get job status'
     });
   }
+});
+
+// GET /api/export/:jobId/file - Download a finished export
+router.get('/export/:jobId/file', (req: Request, res: Response) => {
+  const { jobId } = req.params;
+
+  if (!JOB_ID_PATTERN.test(jobId)) {
+    return res.status(400).json({ error: 'Invalid job id' });
+  }
+
+  const filePath = getExportFilePath(jobId);
+  if (!filePath) {
+    return res.status(404).json({ error: 'Export file not found' });
+  }
+
+  return res.download(filePath, `${jobId}.mp4`);
 });
 
 export default router;

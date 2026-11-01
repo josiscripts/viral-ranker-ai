@@ -3,7 +3,7 @@ import { downloadVideo } from '../services/downloadService';
 
 const router = Router();
 
-router.post('/download', (req: Request, res: Response) => {
+router.post('/download', async (req: Request, res: Response) => {
   try {
     const { url } = req.body;
 
@@ -25,7 +25,7 @@ router.post('/download', (req: Request, res: Response) => {
     }
 
     // Download video
-    const result = downloadVideo(trimmedUrl);
+    const result = await downloadVideo(trimmedUrl);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error || 'Download failed' });

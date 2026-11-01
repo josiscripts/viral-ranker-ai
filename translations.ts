@@ -88,6 +88,11 @@ export const translations = {
     checklistPrimary: "Bright primary font styles (like Blue Box or Neon)",
     checklistShort: "Keep total ranking list under 45 seconds",
     checklistSurprise: "Include funny or surprising titles to boost comments",
+
+    // Error boundary
+    errorBoundaryTitle: "Something went wrong",
+    errorBoundaryDesc: "The editor hit an unexpected error. Your saved projects are still stored in this browser.",
+    errorBoundaryReload: "Reload app",
   },
   es: {
     // Navigation / Sidebar
@@ -178,5 +183,10 @@ export const translations = {
     checklistPrimary: "Estilos de fuente llamativos (como Blue Box o Glow)",
     checklistShort: "Mantén el video total de clasificación por debajo de 45 segundos",
     checklistSurprise: "Incluye títulos divertidos o sorprendentes para impulsar comentarios",
+
+    // Error boundary
+    errorBoundaryTitle: "Algo salió mal",
+    errorBoundaryDesc: "El editor encontró un error inesperado. Tus proyectos guardados siguen almacenados en este navegador.",
+    errorBoundaryReload: "Recargar aplicación",
   }
 };

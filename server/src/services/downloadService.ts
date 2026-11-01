@@ -1,8 +1,13 @@
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { runProcess, ProcessError } from './processRunner';
+import { getVideoDuration } from './videoService';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'storage', 'uploads');
+
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_DOWNLOAD_SIZE = '300M';
+const MAX_VIDEO_DURATION_SECONDS = 900; // 15 minutes
 
 export type Platform = 'youtube' | 'tiktok' | 'instagram' | 'unknown';
 
@@ -13,41 +18,41 @@ export interface DownloadResponse {
   platform: Platform;
 }
 
-export const detectPlatform = (url: string): Platform => {
+// Hostnames are matched exactly or as a subdomain ("www.youtube.com"), never as a
+// substring: "youtube.com.attacker.example" must not be accepted.
+const PLATFORM_HOSTS: Record<Exclude<Platform, 'unknown'>, string[]> = {
+  youtube: ['youtube.com', 'youtu.be'],
+  tiktok: ['tiktok.com'],
+  instagram: ['instagram.com', 'instagr.am']
+};
+
+const hostMatches = (hostname: string, allowedHost: string): boolean =>
+  hostname === allowedHost || hostname.endsWith(`.${allowedHost}`);
+
+export const parseSupportedUrl = (url: string): { platform: Platform; normalizedUrl: string } => {
   try {
     const urlObj = new URL(url);
+    if (urlObj.protocol !== 'https:' && urlObj.protocol !== 'http:') {
+      return { platform: 'unknown', normalizedUrl: '' };
+    }
     const hostname = urlObj.hostname.toLowerCase();
 
-    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      return 'youtube';
-    }
-    if (hostname.includes('tiktok.com') || hostname.includes('vm.tiktok.com')) {
-      return 'tiktok';
-    }
-    if (hostname.includes('instagram.com') || hostname.includes('instagr.am')) {
-      return 'instagram';
+    for (const [platform, hosts] of Object.entries(PLATFORM_HOSTS)) {
+      if (hosts.some(host => hostMatches(hostname, host))) {
+        return { platform: platform as Platform, normalizedUrl: urlObj.href };
+      }
     }
   } catch (error) {
     // URL parsing failed
   }
 
-  return 'unknown';
+  return { platform: 'unknown', normalizedUrl: '' };
 };
 
-export const getVideoDuration = (filePath: string): number => {
-  try {
-    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-    const output = execSync(command, { encoding: 'utf-8' });
-    const duration = parseFloat(output.trim());
-    return isNaN(duration) ? 0 : duration;
-  } catch (error) {
-    console.error('Error getting video duration:', error);
-    return 0;
-  }
-};
+export const detectPlatform = (url: string): Platform => parseSupportedUrl(url).platform;
 
-export const downloadVideo = (url: string): { success: boolean; data?: DownloadResponse; error?: string } => {
-  const platform = detectPlatform(url);
+export const downloadVideo = async (url: string): Promise<{ success: boolean; data?: DownloadResponse; error?: string }> => {
+  const { platform, normalizedUrl } = parseSupportedUrl(url);
 
   if (platform === 'unknown') {
     return { success: false, error: 'Unsupported platform. Supported: YouTube, TikTok, Instagram' };
@@ -63,13 +68,21 @@ export const downloadVideo = (url: string): { success: boolean; data?: DownloadR
     const filename = `${timestamp}_${platform}.mp4`;
     const filePath = path.join(UPLOAD_DIR, filename);
 
-    // Download video using yt-dlp
-    const command = `yt-dlp -f best[ext=mp4] -o "${filePath}" "${url}" 2>&1`;
-
+    // Download video using yt-dlp. Arguments are passed without a shell, and "--"
+    // guarantees the URL is never parsed as an option.
     try {
-      execSync(command, { encoding: 'utf-8', timeout: 300000 }); // 5 minute timeout
+      await runProcess('yt-dlp', [
+        '-f', 'best[ext=mp4]',
+        '--no-playlist',
+        '--max-filesize', MAX_DOWNLOAD_SIZE,
+        '--match-filter', `duration <=? ${MAX_VIDEO_DURATION_SECONDS}`,
+        '-o', filePath,
+        '--', normalizedUrl
+      ], { timeoutMs: DOWNLOAD_TIMEOUT_MS });
     } catch (downloadError: any) {
-      const errorOutput = downloadError.stderr || downloadError.message || String(downloadError);
+      const errorOutput = downloadError instanceof ProcessError
+        ? `${downloadError.stderr}\n${downloadError.stdout}`
+        : String(downloadError?.message || downloadError);
 
       // Detect specific error types
       if (errorOutput.includes('private') || errorOutput.includes('restricted')) {
@@ -85,12 +98,15 @@ export const downloadVideo = (url: string): { success: boolean; data?: DownloadR
         return { success: false, error: 'Access denied. Video may be region-restricted' };
       }
 
-      return { success: false, error: `Download failed: ${errorOutput.substring(0, 100)}` };
+      return { success: false, error: `Download failed: ${errorOutput.trim().substring(0, 100)}` };
     }
 
-    // Verify file was created and is valid MP4
+    // yt-dlp exits successfully but writes nothing when a size/duration filter skips the video
     if (!fs.existsSync(filePath)) {
-      return { success: false, error: 'Download completed but file not found' };
+      return {
+        success: false,
+        error: `Video was not downloaded. It may exceed the limits (${MAX_DOWNLOAD_SIZE}B, ${MAX_VIDEO_DURATION_SECONDS / 60} minutes)`
+      };
     }
 
     const stats = fs.statSync(filePath);
@@ -100,7 +116,7 @@ export const downloadVideo = (url: string): { success: boolean; data?: DownloadR
       return { success: false, error: 'Downloaded file is too small. Video may be invalid' };
     }
 
-    const duration = getVideoDuration(filePath);
+    const duration = await getVideoDuration(filePath);
 
     return {
       success: true,

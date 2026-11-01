@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { runProcess } from './processRunner';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'storage', 'uploads');
+export const UPLOAD_TMP_DIR = path.join(process.cwd(), 'storage', 'tmp');
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+const MAX_BASENAME_LENGTH = 60;
 
 export interface UploadResponse {
   videoUrl: string;
@@ -14,6 +16,12 @@ export interface UploadResponse {
 export const ensureUploadDir = () => {
   if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  }
+};
+
+export const ensureUploadTmpDir = () => {
+  if (!fs.existsSync(UPLOAD_TMP_DIR)) {
+    fs.mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
   }
 };
 
@@ -43,11 +51,9 @@ export const validateVideoFile = (
   return { valid: true };
 };
 
-export const isValidMP4 = (filePath: string): { valid: boolean; error?: string } => {
+export const isValidMP4 = async (filePath: string): Promise<{ valid: boolean; error?: string }> => {
   try {
-    // Use simpler, more compatible ffprobe syntax
-    const command = `ffprobe -v error -show_format -show_streams "${filePath}"`;
-    const output = execSync(command, { encoding: 'utf-8' });
+    const { stdout: output } = await runProcess('ffprobe', ['-v', 'error', '-show_format', '-show_streams', filePath]);
 
     // Check for format name in output
     if (!output.includes('mov') && !output.includes('mp4') && !output.includes('format_name')) {
@@ -63,12 +69,15 @@ export const isValidMP4 = (filePath: string): { valid: boolean; error?: string }
   }
 };
 
-export const getVideoDuration = (filePath: string): number => {
+export const getVideoDuration = async (filePath: string): Promise<number> => {
   try {
-    // Use simpler, more compatible ffprobe syntax
-    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-    const output = execSync(command, { encoding: 'utf-8' });
-    const duration = parseFloat(output.trim());
+    const { stdout } = await runProcess('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ]);
+    const duration = parseFloat(stdout.trim());
     return isNaN(duration) ? 0 : duration;
   } catch (error) {
     console.error('Error getting video duration:', error);
@@ -76,27 +85,37 @@ export const getVideoDuration = (filePath: string): number => {
   }
 };
 
-export const saveUploadedVideo = (
-  fileBuffer: Buffer,
+// The stored file name is generated on the server. The client's original name is
+// only used as a readable hint and is reduced to [A-Za-z0-9_-].
+const buildStoredFilename = (originalFilename: string): string => {
+  const baseName = path.basename(originalFilename, path.extname(originalFilename));
+  const safeBaseName = baseName
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, MAX_BASENAME_LENGTH);
+  return `${Date.now()}_${safeBaseName || 'video'}.mp4`;
+};
+
+export const saveUploadedVideo = async (
+  tempFilePath: string,
   originalFilename: string
-): { success: boolean; data?: UploadResponse; error?: string } => {
+): Promise<{ success: boolean; data?: UploadResponse; error?: string }> => {
   ensureUploadDir();
 
-  const timestamp = Date.now();
-  const filename = `${timestamp}_${path.basename(originalFilename)}`;
+  const filename = buildStoredFilename(originalFilename);
   const filePath = path.join(UPLOAD_DIR, filename);
 
   try {
-    fs.writeFileSync(filePath, fileBuffer);
+    fs.renameSync(tempFilePath, filePath);
 
     // Verify it's a valid MP4
-    const validation = isValidMP4(filePath);
+    const validation = await isValidMP4(filePath);
     if (!validation.valid) {
       fs.unlinkSync(filePath);
       return { success: false, error: validation.error };
     }
 
-    const duration = getVideoDuration(filePath);
+    const duration = await getVideoDuration(filePath);
 
     return {
       success: true,
@@ -108,12 +127,14 @@ export const saveUploadedVideo = (
     };
   } catch (error: any) {
     // Clean up partially written file
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+    for (const leftover of [tempFilePath, filePath]) {
+      try {
+        if (fs.existsSync(leftover)) {
+          fs.unlinkSync(leftover);
+        }
+      } catch (cleanupError) {
+        console.error('Error cleaning up failed upload:', cleanupError);
       }
-    } catch (cleanupError) {
-      console.error('Error cleaning up failed upload:', cleanupError);
     }
     return { success: false, error: error.message || 'Failed to save video' };
   }
@@ -123,7 +144,7 @@ export const getFileStats = (filename: string): { size: number; path: string } |
   const filePath = path.join(UPLOAD_DIR, filename);
 
   // Security: prevent path traversal
-  if (!path.resolve(filePath).startsWith(path.resolve(UPLOAD_DIR))) {
+  if (!path.resolve(filePath).startsWith(path.resolve(UPLOAD_DIR) + path.sep)) {
     return null;
   }
 
@@ -136,4 +157,25 @@ export const getFileStats = (filename: string): { size: number; path: string } |
     size: stats.size,
     path: filePath
   };
+};
+
+// Resolves a client-supplied asset id (the stored file name returned by
+// /api/upload or /api/download) to a file inside UPLOAD_DIR. Anything that is not
+// a plain .mp4 file name inside that directory is rejected.
+export const resolveAssetPath = (assetId: unknown): string | null => {
+  if (typeof assetId !== 'string' || !assetId || assetId.includes('\0')) {
+    return null;
+  }
+  if (path.basename(assetId) !== assetId || assetId.includes('/') || assetId.includes('\\')) {
+    return null;
+  }
+  if (path.extname(assetId).toLowerCase() !== '.mp4') {
+    return null;
+  }
+
+  const fileInfo = getFileStats(assetId);
+  if (!fileInfo || !fs.statSync(fileInfo.path).isFile()) {
+    return null;
+  }
+  return fileInfo.path;
 };

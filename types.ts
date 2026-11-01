@@ -2,6 +2,8 @@
 export interface Clip {
   id: string;
   url: string;
+  // Server-side file name returned by /api/upload or /api/download; exports reference clips by this id
+  assetId?: string;
   thumbnail?: string;
   startTime: number;
   endTime: number;

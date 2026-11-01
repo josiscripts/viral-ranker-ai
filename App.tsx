@@ -158,10 +158,25 @@ const INITIAL_PROJECTS: Project[] = [
   }
 ];
 
+// Header required by the backend on every POST (forces a CORS preflight)
+const APP_REQUEST_HEADERS = { 'X-Requested-With': 'viral-ranker' };
+
+// Clips created before assetId existed only store the served URL (/api/files/<name>)
+const getClipAssetId = (clip: Clip): string | undefined => {
+  if (clip.assetId) return clip.assetId;
+  try {
+    const { pathname } = new URL(clip.url, window.location.origin);
+    const prefix = '/api/files/';
+    return pathname.startsWith(prefix) ? decodeURIComponent(pathname.slice(prefix.length)) : undefined;
+  } catch (e) {
+    return undefined;
+  }
+};
+
 const DEFAULT_PROFILE: UserProfile = {
-  name: 'Josias Quispe',
-  email: 'josiasquispe28@gmail.com',
-  handle: '@josias_creator',
+  name: 'Creator',
+  email: '',
+  handle: '@creator',
   bio: 'Creating high-impact viral content with AI rankers. Transforming simple concepts into viral hooks.',
   avatarUrl: 'neon_hustler',
   defaultPlatform: 'TikTok',
@@ -181,7 +196,9 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('viral_ranker_projects');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // An empty list would leave the editor without an active project
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
         console.error('Failed to parse projects from localStorage', e);
       }
@@ -197,14 +214,20 @@ const App: React.FC = () => {
   const [editProjectTitle, setEditProjectTitle] = useState('');
 
   const handleDeleteProject = (projectId: string) => {
-    if (window.confirm(lang === 'es' ? '¿Estás seguro de que deseas eliminar este proyecto?' : 'Are you sure you want to delete this project?')) {
-      setProjects(prev => {
-        const filtered = prev.filter(p => p.id !== projectId);
-        if (activeProjectId === projectId && filtered.length > 0) {
-          setActiveProjectId(filtered[0].id);
-        }
-        return filtered;
-      });
+    if (!window.confirm(lang === 'es' ? '¿Estás seguro de que deseas eliminar este proyecto?' : 'Are you sure you want to delete this project?')) {
+      return;
+    }
+    const remaining = projects.filter(p => p.id !== projectId);
+    // Never leave the app without projects: the editor always needs an active one
+    if (remaining.length === 0) {
+      const replacement = createNewProject(`proj_${Date.now()}`);
+      setProjects([replacement]);
+      setActiveProjectId(replacement.id);
+      return;
+    }
+    setProjects(remaining);
+    if (activeProjectId === projectId) {
+      setActiveProjectId(remaining[0].id);
     }
   };
 
@@ -356,7 +379,7 @@ const App: React.FC = () => {
 
       const response = await fetch('http://localhost:3001/api/download', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
         body: JSON.stringify({ url: url.trim() })
       });
 
@@ -379,11 +402,11 @@ const App: React.FC = () => {
       try {
         const data = JSON.parse(responseText);
         console.log(`[DOWNLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration, platform } = data;
+        const { videoUrl, duration, platform, filename } = data;
 
         const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
         const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, duration, endTime: Math.min(duration, 5) } : c
+          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
         );
         updateCurrentProject({ clips: updatedClips });
         setDownloadErrors({ ...downloadErrors, [clipId]: '' });
@@ -417,6 +440,7 @@ const App: React.FC = () => {
 
       const response = await fetch('http://localhost:3001/api/upload', {
         method: 'POST',
+        headers: APP_REQUEST_HEADERS,
         body: formData
       });
 
@@ -445,11 +469,11 @@ const App: React.FC = () => {
       try {
         const data = JSON.parse(responseText);
         console.log(`[UPLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration } = data;
+        const { videoUrl, duration, filename } = data;
 
         const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
         const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, duration, endTime: Math.min(duration, 5) } : c
+          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
         );
         updateCurrentProject({ clips: updatedClips });
         setUploadErrors({ ...uploadErrors, [clipId]: '' });
@@ -495,7 +519,7 @@ const App: React.FC = () => {
         titleStroke: project.titleStroke,
         clips: project.clips.map((clip: Clip) => ({
           id: clip.id,
-          url: clip.url,
+          assetId: getClipAssetId(clip),
           startTime: clip.startTime,
           endTime: clip.endTime,
           rank: clip.rank,
@@ -513,7 +537,7 @@ const App: React.FC = () => {
         clipsCount: exportRequest.clips.length,
         clips: exportRequest.clips.map((c: any) => ({
           id: c.id,
-          url: c.url.substring(0, 50) + '...',
+          assetId: c.assetId,
           startTime: c.startTime,
           endTime: c.endTime,
           rank: c.rank,
@@ -524,7 +548,7 @@ const App: React.FC = () => {
       // Step 1: Create export job
       const createResponse = await fetch('http://localhost:3001/api/export', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
         body: JSON.stringify(exportRequest)
       });
 

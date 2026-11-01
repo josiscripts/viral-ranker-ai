@@ -7,7 +7,8 @@ export default defineConfig(({ mode }) => {
     return {
       server: {
         port: 3000,
-        host: '0.0.0.0',
+        // Fail instead of silently moving to another port: the backend only allows CORS from :3000
+        strictPort: true,
       },
       plugins: [react()],
       define: {

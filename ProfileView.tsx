@@ -190,7 +190,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({
                       value={tempName} 
                       onChange={e => setTempName(e.target.value)}
                       className={`w-full border rounded-2xl px-4 py-3.5 text-xs font-bold transition-colors ${isDarkMode ? 'bg-[#1a1a1a] border-white/5 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-blue-500'}`}
-                      placeholder="e.g. Josias Quispe"
+                      placeholder="e.g. Alex Rivera"
                     />
                   </div>
 
@@ -201,7 +201,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({
                       value={tempHandle} 
                       onChange={e => setTempHandle(e.target.value)}
                       className={`w-full border rounded-2xl px-4 py-3.5 text-xs font-bold transition-colors ${isDarkMode ? 'bg-[#1a1a1a] border-white/5 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-blue-500'}`}
-                      placeholder="e.g. @josias_creator"
+                      placeholder="e.g. @your_handle"
                     />
                   </div>
 

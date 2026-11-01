@@ -281,8 +281,54 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 
 ---
 
+## Auditoría — Prioridad 0 (seguridad y estabilidad)
+**Estado:** 🟡 En progreso (7 de 8 tareas cerradas; P0-06 parcial, falta rate limiting)
+**Origen:** `AUDIT_REPORT/12_PLAN_DE_DESARROLLO.md`, sección "PRIORIDAD 0". Autorizado por el usuario ("Sí, empieza P0").
+**Verificación:** `tsc --noEmit` del servidor sin errores, `vite build` OK, pruebas manuales con `curl`/scripts Node contra el servidor local y prueba e2e en el navegador (ver `AUDIT_REPORT/12_PLAN_DE_DESARROLLO.md`, "Estado de ejecución de P0").
+
+| Tarea | Estado | Resumen |
+|---|---|---|
+| P0-01 Procesos sin shell | ✅ | `runProcess` (`execFile`, argumentos en array, timeout); sin `exec`/`execSync` en `server/src` |
+| P0-02 Path traversal de exports | ✅ | Eliminada `/api/exports/:filename`; nueva `GET /api/export/:jobId/file` (UUID + job completado) |
+| P0-03 Export solo con assets propios | ✅ | `Clip.assetId`; el servidor resuelve dentro de `uploads/` y rechaza `url`; ffmpeg con `-protocol_whitelist file` |
+| P0-04 Borrar el último proyecto + Error Boundary | ✅ | Se crea un proyecto nuevo al borrar el último; `ErrorBoundary.tsx` traducido y con tema |
+| P0-05 Texto seguro en `drawtext` | ✅ | `textfile=` + `expansion=none`, validación de títulos (≤ 100 caracteres, sin caracteres de control salvo `\n`), fuente explícita |
+| P0-06 Superficie de red y límites | 🟡 | Hecho: `127.0.0.1`, `strictPort`, cabecera `X-Requested-With`, límites de yt-dlp, multer a disco. **Falta:** rate limiting (requiere aprobar `express-rate-limit`) |
+| P0-07 Datos personales | ✅ | Perfil por defecto genérico; 0 coincidencias en el bundle |
+| P0-08 Dependencias vulnerables | ✅ | `npm audit fix`; `uuid` sustituido por `crypto.randomUUID()`. Quedan 2 moderadas en `qs` (vía express 4.22.2), 0 altas/críticas |
+
+**Archivos creados:**
+- `/server/src/services/processRunner.ts` — ejecución de procesos sin shell
+- `/ErrorBoundary.tsx` — pantalla de error de último recurso
+
+**Archivos modificados:**
+- `/server/src/index.ts` — sin ruta `/api/exports`, `HOST`, cabecera obligatoria en POST
+- `/server/src/routes/export.ts` — validación del payload, ruta de descarga por job
+- `/server/src/routes/upload.ts` — multer a disco temporal
+- `/server/src/routes/download.ts` — handler asíncrono
+- `/server/src/services/downloadService.ts` — validación de host, yt-dlp con límites
+- `/server/src/services/videoService.ts` — ffprobe asíncrono, nombres saneados, `resolveAssetPath`
+- `/server/src/services/ffmpegService.ts` — argumentos en array, `textfile`, fuente explícita
+- `/server/src/services/exportService.ts` — `assetId`, `randomUUID`, `getExportFilePath`
+- `/server/.env.example` — `HOST` y `FONT_FILE` opcional
+- `/server/package.json`, `/server/package-lock.json` — sin `uuid`, `npm audit fix`
+- `/types.ts` — `Clip.assetId`
+- `/App.tsx` — cabecera de la app en los fetch, `assetId`, borrado del último proyecto, perfil genérico
+- `/index.tsx` — envuelve `<App/>` en `<ErrorBoundary>`
+- `/translations.ts` — textos del Error Boundary (ES/EN)
+- `/ProfileView.tsx` — placeholders genéricos
+- `/vite.config.ts` — sin `host: '0.0.0.0'`, `strictPort: true`
+
+---
+
 ## Notas / Deuda técnica
 (Esta sección se va llenando durante el desarrollo — cualquier cosa detectada fuera de orden de fase se anota aquí en vez de implementarse de inmediato)
+
+- **Auditoría P0 (hallazgo)**: Con el ffmpeg actual (9.0.2, Windows), `drawtext` sin `fontfile` se cuelga (Fontconfig sin configuración, exit -1073741819). Las exportaciones con título de la Fase 6 fallaban en esta máquina antes de P0. Ahora se pasa siempre una fuente del sistema (o `FONT_FILE` del `.env`). Pendiente: empaquetar una fuente libre en el repo. Hay que decidir si la Fase 6 se reabre.
+- **Auditoría P0 (hallazgo)**: El frontend no tiene `@types/react`, así que React no tiene tipos y `tsc` de la raíz no detecta errores de props ni de hooks. Instalarlo requiere aprobación (dependencia nueva).
+- **Auditoría P0 (hallazgo)**: yt-dlp 2026.10.21 no descarga de YouTube sin un runtime de JavaScript (pide `deno` para resolver el challenge). Es un problema del entorno, no del código. Mientras tanto, las descargas de YouTube devuelven 400 con ese mensaje.
+- **Auditoría P0 (pendiente)**: Rate limiting en `/api/upload`, `/api/download` y `/api/export` (P0-06). Necesita aprobar `express-rate-limit`.
+- **Auditoría P0 (pendiente)**: 2 vulnerabilidades moderadas de `qs` dependen de express 4.22.2. Se resuelven al actualizar express cuando exista un parche.
 
 - **Fase 2 (Deuda técnica)**: Los archivos subidos en `/server/storage/uploads/` no se borran automáticamente. Actualmente permanecen en disco indefinidamente una vez generados. Para Fase 6 (Exportación) considerar: (a) borrar archivo tras generar export final, (b) implementar garbage collector que borde archivos > N días, o (c) usar almacenamiento temporal del SO. Impacto: acumulación de espacio en disco. Prioridad: media (después de que Fase 6 esté funcional).
 - **Fase 4 (Deuda técnica)**: Panel de control (play/pause/timeline) en el preview está posicionado en medio del lienzo, lo que puede interferir visualmente con la visualización de los clips de ranking en ciertos layouts. A resolver como mejora cosmética: reposicionar el panel al fondo del preview o hacerlo más discreto. Impacto: cosmético, sin afectar funcionalidad. Prioridad: baja.
