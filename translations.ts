@@ -111,6 +111,8 @@ export const translations = {
     exportRetry: "Retry",
     exportDismiss: "Close",
     downloadFromLink: "Download video from link",
+    moveClipUp: "Move clip up",
+    moveClipDown: "Move clip down",
   },
   es: {
     // Navigation / Sidebar
@@ -224,5 +226,7 @@ export const translations = {
     exportRetry: "Reintentar",
     exportDismiss: "Cerrar",
     downloadFromLink: "Descargar video del enlace",
+    moveClipUp: "Subir clip",
+    moveClipDown: "Bajar clip",
   }
 };

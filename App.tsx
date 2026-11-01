@@ -69,6 +69,7 @@ import {
 import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
+import { renumberClips, moveClip } from './utils/clips';
 
 const getClipLayoutConfig = (clipCount: number) => {
   if (clipCount <= 4) {
@@ -193,8 +194,9 @@ const migrateLegacyClip = (clip: Clip): Clip => {
   return { ...migrated, assetId: clip.assetId || getClipAssetId(migrated) };
 };
 
+// Also renumbers ranks: older versions could save duplicated ranks (E-12)
 const migrateLegacyProjects = (projects: Project[]): Project[] =>
-  projects.map(project => Array.isArray(project.clips) ? { ...project, clips: project.clips.map(migrateLegacyClip) } : project);
+  projects.map(project => Array.isArray(project.clips) ? { ...project, clips: renumberClips(project.clips.map(migrateLegacyClip)) } : project);
 
 // Clips the server would reject, checked before anything is sent
 const getExportIssues = (clips: Clip[]): ExportValidationIssue[] =>
@@ -1185,7 +1187,7 @@ const App: React.FC = () => {
                     onClick={() => {
                       const nextRank = project.clips.length + 1;
                       const newClip: Clip = { id: `clip_${Date.now()}`, url: '', startTime: 0, endTime: 5, rank: nextRank, title: `Rank #${nextRank} Item`, titleStyleId: 'BLUE_BOX' };
-                      updateCurrentProject({ clips: [...project.clips, newClip] });
+                      updateCurrentProject({ clips: renumberClips([...project.clips, newClip]) });
                       setActiveClipId(newClip.id);
                     }}
                     disabled={project.clips.length >= 10}
@@ -1204,8 +1206,11 @@ const App: React.FC = () => {
                     key={clip.id} clip={clip} index={index} active={activeClipId === clip.id}
                     onClick={() => setActiveClipId(clip.id)}
                     onUpdate={handleUpdateClip}
+                    onMove={(id, offset) => updateCurrentProject({ clips: moveClip(project.clips, id, offset) })}
+                    isFirst={index === 0}
+                    isLast={index === project.clips.length - 1}
                     onRemove={(id) => {
-                      const updated = project.clips.filter(c => c.id !== id);
+                      const updated = renumberClips(project.clips.filter(c => c.id !== id));
                       updateCurrentProject({ clips: updated });
                       if (activeClipId === id) setActiveClipId(updated[0]?.id || null);
                     }}
@@ -1323,7 +1328,7 @@ const ToolbarDropdown: React.FC<{ label?: string | React.ReactNode, icon?: React
   <button className={`flex items-center gap-1 p-2 rounded-lg transition-all ${isDarkMode ? 'text-gray-500 hover:bg-white/5 hover:text-white' : 'text-gray-600 hover:bg-white hover:text-black'}`}>{label || icon} <ChevronDown size={14} className="opacity-50" /></button>
 );
 
-const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, isUploading?: boolean, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, isDownloading?: boolean, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, isUploading = false, uploadError, onDownloadUrl, isDownloading = false, downloadError }) => {
+const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, onMove: (id: string, offset: -1 | 1) => void, isFirst: boolean, isLast: boolean, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, isUploading?: boolean, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, isDownloading?: boolean, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, onMove, isFirst, isLast, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, isUploading = false, uploadError, onDownloadUrl, isDownloading = false, downloadError }) => {
   const [sourceTab, setSourceTab] = useState<'url' | 'upload'>('url');
   // What the user types stays local: a download starts only on Enter, paste or the button
   const [urlDraft, setUrlDraft] = useState(clip.sourceUrl ?? '');
@@ -1347,6 +1352,10 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
         <div className="flex items-center gap-3 relative">
           <button onClick={e => { e.stopPropagation(); onOpenMenu(isMenuOpen ? null : clip.id); }} className={`p-3 rounded-2xl transition-all relative z-10 ${isMenuOpen || active ? 'text-blue-400 bg-blue-600/10' : 'text-blue-500/40 hover:text-blue-400 hover:bg-blue-400/10'}`}><ChevronRight size={22} className={`transition-transform duration-300 ${isMenuOpen ? 'rotate-90' : ''}`} /></button>
           {isMenuOpen && <div onClick={e => e.stopPropagation()} className={`absolute top-full right-0 mt-2 w-48 rounded-2xl border p-2 shadow-[0_20px_50px_rgba(0,0,0,0.2)] z-[100] animate-in fade-in zoom-in-95 duration-200 ${isDarkMode ? 'bg-[#1a1a1a] border-white/10' : 'bg-white border-gray-200'}`}><div className="flex flex-col gap-1"><button onClick={() => handleTitleTransform('upper')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'MAYÚSCULAS' : 'UPPERCASE'}</button><button onClick={() => handleTitleTransform('lower')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'minúsculas' : 'lowercase'}</button><button onClick={() => handleTitleTransform('capitalize')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'Capitalizar' : 'Capitalize'}</button><div className={`h-px w-full my-1 ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}></div><button onClick={() => { onUpdate(clip.id, { titleItalic: !clip.titleItalic }); onOpenMenu(null); }} className={`flex items-center justify-between px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><div className="flex items-center gap-3"><Italic size={14} className={clip.titleItalic ? 'text-blue-500' : ''} /> {lang === 'es' ? 'Cursiva' : 'Italic'}</div>{clip.titleItalic && <CheckCircle2 size={12} className="text-blue-500" />}</button></div></div>}
+          <div className="flex flex-col">
+            <button type="button" onClick={e => { e.stopPropagation(); onMove(clip.id, -1); }} disabled={isFirst} aria-label={translations[lang].moveClipUp} title={translations[lang].moveClipUp} className={`p-1.5 rounded-lg transition-all disabled:opacity-20 disabled:pointer-events-none ${isDarkMode ? 'text-gray-600 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}><ArrowUp size={16} /></button>
+            <button type="button" onClick={e => { e.stopPropagation(); onMove(clip.id, 1); }} disabled={isLast} aria-label={translations[lang].moveClipDown} title={translations[lang].moveClipDown} className={`p-1.5 rounded-lg transition-all disabled:opacity-20 disabled:pointer-events-none ${isDarkMode ? 'text-gray-600 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}><ArrowDown size={16} /></button>
+          </div>
           <button onClick={e => { e.stopPropagation(); onRemove(clip.id); }} className={`p-3 transition-all rounded-2xl ${isDarkMode ? 'text-gray-600 hover:text-red-500 hover:bg-red-500/10' : 'text-gray-400 hover:text-red-600 hover:bg-red-50'}`}><Trash2 size={20}/></button>
         </div>
       </div>

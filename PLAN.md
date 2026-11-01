@@ -336,7 +336,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 3 | P1-05 Entrada de URL robusta | ✅ |
 | 4 | P1-06 Descargas de mejor calidad | ✅ |
 | 5 | P1-08 Clip activo y operaciones asíncronas | ✅ |
-| 6 | P1-09 Rangos coherentes y reordenación | 🔲 |
+| 6 | P1-09 Rangos coherentes y reordenación | ✅ |
 | 7 | P1-10 Preview fiel al trim | 🔲 |
 | 8 | P1-03 Export normalizado 1080×1920 | 🔲 |
 | 9 | P1-02 Coordenadas normalizadas | 🔲 |
@@ -452,6 +452,21 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   - `ClipCard` recibe `isUploading`/`isDownloading`.
 - **Archivos:** `App.tsx`, `tests/e2e/clip-state.test.mjs` (nuevo).
 - **Pruebas:** `npm run test:e2e` da 14/14, con `/api/download` simulado con retardo. `tsc --strict` da 0 errores.
+
+**P1-09 — Rangos coherentes y reordenación** ✅
+- **Error original (E-12), reproducido:** con el test nuevo sobre el código anterior, borrar el clip 2 de 3 y añadir otro dejaba los rangos `1, 3, 3`, porque el nuevo recibía `length + 1`. El servidor ordena el export por `rank`, así que con rangos repetidos el orden del vídeo no estaba definido. Además, no había forma de reordenar los clips.
+- **Solución:**
+  - `utils/clips.ts` (nuevo, funciones puras): `renumberClips` (el rango sigue el orden de la lista) y `moveClip`.
+  - Se renumera al añadir, al borrar, al mover y al cargar proyectos guardados (corrige los duplicados antiguos).
+  - Botones ↑/↓ en cada `ClipCard`, con los iconos `ArrowUp`/`ArrowDown` ya importados, `aria-label` traducido y desactivados en los extremos.
+- **Archivos:** `utils/clips.ts` (nuevo), `App.tsx`, `translations.ts`, `package.json` (`npm run test:unit`), `tests/unit/clips.test.ts` (nuevo), `tests/e2e/ranks.test.mjs` (nuevo).
+- **Pruebas:**
+  - Con el código anterior, 2 tests e2e fallaron (`1,3,3` y duplicados sin corregir).
+  - Con la corrección:
+    - `npm run test:unit` da 5/5;
+    - `ranks.test.mjs` da 3/3 (borrar+añadir, mover con botones y extremos desactivados, migración de duplicados);
+    - `tsc --strict` da 0 errores.
+  - También hay capturas de los botones en tema claro y oscuro.
 
 ---
 
