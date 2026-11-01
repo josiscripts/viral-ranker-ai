@@ -10,6 +10,7 @@ import {
   deleteDirectory
 } from './ffmpegService';
 import { resolveAssetPath } from './videoService';
+import { STORAGE_DIR, PROCESSING_DIR, EXPORTS_DIR } from '../config';
 
 export interface ExportJob {
   jobId: string;
@@ -43,13 +44,8 @@ export interface ExportRequest {
   }[];
 }
 
-// Use absolute path from server root
-const STORAGE_BASE = path.join(__dirname, '..', '..', 'storage');
-const PROCESSING_DIR = path.join(STORAGE_BASE, 'processing');
-const EXPORTS_DIR = path.join(STORAGE_BASE, 'exports');
-
 console.log('DEBUG: Storage paths configured:');
-console.log('  STORAGE_BASE:', STORAGE_BASE);
+console.log('  STORAGE_DIR:', STORAGE_DIR);
 console.log('  PROCESSING_DIR:', PROCESSING_DIR);
 console.log('  EXPORTS_DIR:', EXPORTS_DIR);
 const JOB_CLEANUP_INTERVAL = 60 * 1000; // 1 minute check

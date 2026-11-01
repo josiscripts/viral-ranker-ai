@@ -2,8 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { runProcess, ProcessError } from './processRunner';
 import { getVideoDuration } from './videoService';
-
-const UPLOAD_DIR = path.join(process.cwd(), 'storage', 'uploads');
+import { UPLOAD_DIR } from '../config';
 
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_DOWNLOAD_SIZE = '300M';

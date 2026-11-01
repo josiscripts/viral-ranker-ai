@@ -1,14 +1,14 @@
+// Load .env before any other module reads process.env at import time
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import healthRoutes from './routes/health';
 import uploadRoutes from './routes/upload';
 import filesRoutes from './routes/files';
 import downloadRoutes from './routes/download';
 import exportRoutes from './routes/export';
-
-dotenv.config();
+import { UPLOAD_DIR } from './config';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -65,5 +65,5 @@ app.use('/api', exportRoutes);
 app.listen(PORT, HOST, () => {
   console.log(`✅ Server running on http://${HOST}:${PORT}`);
   console.log(`📡 CORS enabled for ${FRONTEND_URL}`);
-  console.log(`📁 Video uploads: /server/storage/uploads`);
+  console.log(`📁 Video uploads: ${UPLOAD_DIR}`);
 });
