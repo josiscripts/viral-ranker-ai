@@ -7,6 +7,7 @@ import {
   ExportRequest
 } from '../services/exportService';
 import { resolveAssetPath } from '../services/videoService';
+import { resolveOverlayPath } from '../services/overlayService';
 
 const router = Router();
 
@@ -115,6 +116,11 @@ router.post('/export', async (req: Request, res: Response) => {
       if (clip.clipTitlePosition !== undefined && !isValidPosition(clip.clipTitlePosition)) {
         return res.status(400).json({
           error: `Clip "${clip.title}": clipTitlePosition must have fx/fy between 0 and 1`
+        });
+      }
+      if (clip.overlayId !== undefined && !resolveOverlayPath(clip.overlayId)) {
+        return res.status(400).json({
+          error: `Clip "${clip.title}": overlayId does not match an uploaded overlay`
         });
       }
       if (!resolveAssetPath(clip.assetId)) {

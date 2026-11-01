@@ -96,6 +96,7 @@ export const translations = {
 
     // Export progress and errors ({n} = clip number, {total} = clip count)
     exportStepQueued: "Waiting to start...",
+    exportStepOverlays: "Preparing design {n} of {total}",
     exportStepClip: "Processing clip {n} of {total}",
     exportStepConcat: "Joining clips",
     exportStepCleanup: "Finishing",
@@ -108,6 +109,7 @@ export const translations = {
     exportErrorServer: "The server could not finish the export:",
     exportErrorNetwork: "Could not reach the server. Make sure the backend is running.",
     exportErrorTimeout: "The export took too long. The server may be busy.",
+    exportErrorRender: "The video design could not be prepared in this browser.",
     exportRetry: "Retry",
     exportDismiss: "Close",
     downloadFromLink: "Download video from link",
@@ -211,6 +213,7 @@ export const translations = {
 
     // Progreso y errores del export ({n} = número de clip, {total} = número de clips)
     exportStepQueued: "Esperando para empezar...",
+    exportStepOverlays: "Preparando el diseño {n} de {total}",
     exportStepClip: "Procesando clip {n} de {total}",
     exportStepConcat: "Uniendo clips",
     exportStepCleanup: "Finalizando",
@@ -223,6 +226,7 @@ export const translations = {
     exportErrorServer: "El servidor no pudo terminar la exportación:",
     exportErrorNetwork: "No se pudo conectar con el servidor. Comprueba que el backend esté en marcha.",
     exportErrorTimeout: "La exportación tardó demasiado. El servidor puede estar muy ocupado.",
+    exportErrorRender: "No se pudo preparar el diseño del vídeo en este navegador.",
     exportRetry: "Reintentar",
     exportDismiss: "Cerrar",
     downloadFromLink: "Descargar video del enlace",

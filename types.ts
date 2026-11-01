@@ -76,7 +76,8 @@ export interface UserProfile {
 
 
 // Export progress step reported by GET /api/export/:jobId
-export type ExportStepKey = 'queued' | 'processingClip' | 'concatenating' | 'cleaningUp' | 'completed';
+// 'renderingOverlays' happens in the browser, before the job is sent; the rest come from the server
+export type ExportStepKey = 'renderingOverlays' | 'queued' | 'processingClip' | 'concatenating' | 'cleaningUp' | 'completed';
 
 export interface ExportStep {
   key: ExportStepKey;
@@ -92,7 +93,7 @@ export interface ExportValidationIssue {
 
 // Why an export failed. `message` is the server's own text, shown as a detail.
 export interface ExportErrorInfo {
-  kind: 'noClips' | 'validation' | 'server' | 'network' | 'timeout';
+  kind: 'noClips' | 'validation' | 'render' | 'server' | 'network' | 'timeout';
   issues?: ExportValidationIssue[];
   message?: string;
 }
@@ -122,6 +123,7 @@ export interface ExportRequest {
     title: string;
     titleStyle: { color: string };
     clipTitlePosition?: NormalizedPosition;
+    overlayId?: string; // design layer from /api/overlays
   }[];
 }
 

@@ -87,6 +87,31 @@ P3-01a (tests de humo) → P0-01 → P0-02 → P0-03 → P0-05 → P0-04 → P0-
 
 ---
 
+## Estado de ejecución de P1 (2026-11-01)
+
+Implementado en la rama `codex/p1-estabilizacion`, con un commit por tarea y sin push a `main`. El detalle (error original reproducido, solución, archivos y pruebas) está en `PLAN.md`, sección "Auditoría — Prioridad 1". La Fase 6 de `PLAN.md` se reabrió y se cerró al terminar P1-03, P1-02 y P1-04.
+
+| Tarea | Estado | Verificación |
+|---|---|---|
+| P1-01 Errores de export visibles | ✅ | e2e (5) |
+| P1-07 Cliente API, proxy, build del servidor | ✅ | e2e (2), bundle sin `localhost:3001` |
+| P1-05 Entrada de URL | ✅ | e2e (3) |
+| P1-06 Descargas H.264 ≤ 1080p | ✅ | descargas reales de YouTube; **TikTok/Instagram no verificados** |
+| P1-08 Estado asíncrono por clip | ✅ | e2e (4) |
+| P1-09 Rangos 1..N y reordenación | ✅ | unit + e2e (3) |
+| P1-10 Preview fiel al trim | ✅ | unit + e2e (3) |
+| P1-03 Export normalizado 1080×1920 | ✅ | `ffprobe`: 1080×1920, 30 fps, AAC 48 kHz estéreo, duración = suma de trims ±0,1 s |
+| P1-02 Coordenadas normalizadas | ✅ | preview frente a fotograma exportado ±2 % (diferencia medida ≤ 0,1 %) |
+| P1-04 🔶 Fidelidad visual | ✅ opción (b) | cajas, palabra resaltada y lista medidas en el fotograma |
+| Fuente Inter (OFL) incluida | ✅ | procedencia y hashes en `server/assets/fonts/README.md` |
+
+Al cierre de P1: 14 tests unitarios, 20 del servidor y 27 e2e, todos pasando, con `tsc --strict` en 0 errores y ambos builds OK.
+
+Pendiente:
+- decidir sobre `yt-dlp-ejs` (dependencia de Python no autorizada);
+- probar descargas reales de TikTok e Instagram;
+- E-37: el archivo exportado se descarga como `<jobId>.mp4`.
+
 ## Estado de ejecución de P0 (2026-11-01)
 
 Implementado tras tu autorización. No hay nada commiteado. El detalle por archivo está en `PLAN.md`, sección "Auditoría — Prioridad 0". Todo lo de abajo se probó contra el servidor local (`127.0.0.1:3001`) y Vite (`localhost:3000`). No hay tests automatizados: P3-01a sigue pendiente.

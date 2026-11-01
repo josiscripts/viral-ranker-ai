@@ -74,6 +74,14 @@ export async function uploadVideoFile(file: File): Promise<VideoAssetResponse> {
   return readJson<VideoAssetResponse>(response);
 }
 
+// Design layer (transparent PNG) of one clip, referenced by the export request
+export async function uploadOverlay(png: Blob): Promise<{ overlayId: string }> {
+  const formData = new FormData();
+  formData.append('overlay', png, 'overlay.png');
+  const response = await request('/api/overlays', { method: 'POST', body: formData });
+  return readJson<{ overlayId: string }>(response);
+}
+
 export async function createExportJob(payload: ExportRequest): Promise<{ jobId: string }> {
   const response = await request('/api/export', {
     method: 'POST',

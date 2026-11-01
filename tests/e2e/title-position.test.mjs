@@ -30,10 +30,11 @@ after(async () => {
   if (fixturesDir) fs.rmSync(fixturesDir, { recursive: true, force: true });
 });
 
-// Titles away from the video area (40 % of the height, centered), over a red background
+// Titles away from the video area (40 % of the height, centered), over a red background.
+// The main title sits above the rank list, which starts at 15 % of the height.
 const positionedProject = () => makeProject(
   [makeClip('clip_a', 1, { url: `/api/files/${asset}`, assetId: asset, duration: 2, title: 'CLIP TITLE', clipTitlePosition: { fx: 0.7, fy: 0.85 } })],
-  { title: 'MAIN TITLE', titlePosition: { fx: 0.35, fy: 0.15 }, background: '#ff0000', videoHeight: 40 }
+  { title: 'MAIN TITLE', titlePosition: { fx: 0.35, fy: 0.08 }, background: '#ff0000', videoHeight: 40 }
 );
 
 // Center of each title and its height, as fractions of the canvas
@@ -85,20 +86,20 @@ test('the preview keeps titles in the same place and size at any window size', a
   assert.equal(new Set(sizes).size, VIEWPORTS.length, `canvas widths should differ: ${sizes.join(', ')}`);
   for (const result of results) {
     assertClose(result.main.fx, 0.35, 'main fx');
-    assertClose(result.main.fy, 0.15, 'main fy');
+    assertClose(result.main.fy, 0.08, 'main fy');
     assertClose(result.clip.fx, 0.7, 'clip fx');
     assertClose(result.clip.fy, 0.85, 'clip fy');
     assertClose(result.main.height, results[0].main.height, 'main height');
   }
 });
 
-// Bounding box of the white text pixels in rows [top, bottom) of an RGB frame
-const whiteBox = (frame, width, top, bottom) => {
+// Bounding box of the title's blue box (BLUE_BOX style, bg-blue-600) in rows [top, bottom) of an RGB frame
+const blueBox = (frame, width, top, bottom) => {
   let [minX, minY, maxX, maxY] = [Infinity, Infinity, -1, -1];
   for (let y = top; y < bottom; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 3;
-      if (frame[i] > 200 && frame[i + 1] > 200 && frame[i + 2] > 200) {
+      if (frame[i] < 90 && frame[i + 1] > 70 && frame[i + 1] < 140 && frame[i + 2] > 200) {
         minX = Math.min(minX, x); maxX = Math.max(maxX, x);
         minY = Math.min(minY, y); maxY = Math.max(maxY, y);
       }
@@ -137,9 +138,9 @@ test('the exported frame puts the titles where the preview shows them', async t 
 
   const [width, height] = [1080, 1920];
   const frame = execFileSync('ffmpeg', ['-hide_banner', '-v', 'error', '-ss', '0.5', '-i', video, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: 16 * 1024 * 1024, windowsHide: true });
-  // The video covers rows 0.3H-0.7H; the main title is above it and the clip title below
-  const main = whiteBox(frame, width, 0, Math.round(height * 0.3));
-  const clip = whiteBox(frame, width, Math.round(height * 0.7), height);
+  // The main title is above the rank list (0.15H); the video covers 0.3H-0.7H and the clip title is below it
+  const main = blueBox(frame, width, 0, Math.round(height * 0.13));
+  const clip = blueBox(frame, width, Math.round(height * 0.7), height);
 
   t.diagnostic(`preview main ${preview.main.fx.toFixed(3)},${preview.main.fy.toFixed(3)} clip ${preview.clip.fx.toFixed(3)},${preview.clip.fy.toFixed(3)}`);
   t.diagnostic(`export  main ${main.fx.toFixed(3)},${(main.fy / height).toFixed(3)} clip ${clip.fx.toFixed(3)},${(clip.fy / height).toFixed(3)}`);

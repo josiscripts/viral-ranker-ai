@@ -64,8 +64,10 @@ import {
   downloadVideoFromUrl,
   uploadVideoFile,
   createExportJob,
-  getExportJobStatus
+  getExportJobStatus,
+  uploadOverlay
 } from './services/apiClient';
+import { renderOverlayPng } from './services/overlayRenderer';
 import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
@@ -527,6 +529,8 @@ const App: React.FC = () => {
 
   const formatExportStep = (step: ExportStep) => {
     switch (step.key) {
+      case 'renderingOverlays':
+        return t.exportStepOverlays.replace('{n}', String(step.clip ?? '')).replace('{total}', String(step.total ?? ''));
       case 'processingClip':
         return t.exportStepClip.replace('{n}', String(step.clip ?? '')).replace('{total}', String(step.total ?? ''));
       case 'concatenating':
@@ -552,9 +556,41 @@ const App: React.FC = () => {
         return [t.exportErrorNetwork];
       case 'timeout':
         return [t.exportErrorTimeout];
+      case 'render':
+        return [t.exportErrorRender];
       default:
         return error.message ? [t.exportErrorServer, error.message] : [t.exportErrorServer];
     }
+  };
+
+  // The rank list animates the active clip for 500 ms; the layer is taken after it settles
+  const OVERLAY_SETTLE_MS = 600;
+
+  // P1-04: the design layer of each clip is rendered from the live preview (the
+  // preview switches to every clip in turn), so the video shows what the user sees.
+  const renderClipOverlays = async (clips: Clip[]): Promise<Record<string, string>> => {
+    const canvas = previewContainerRef.current;
+    if (!canvas) return {};
+    const previousClipId = activeClipId;
+    const overlayIds: Record<string, string> = {};
+    try {
+      for (let i = 0; i < clips.length; i++) {
+        setExportStep({ key: 'renderingOverlays', clip: i + 1, total: clips.length });
+        setActiveClipId(clips[i].id);
+        await new Promise(resolve => setTimeout(resolve, OVERLAY_SETTLE_MS));
+        let png: Blob;
+        try {
+          png = await renderOverlayPng(canvas);
+        } catch (error) {
+          console.error('[EXPORT] Design layer rendering failed:', error);
+          throw new ExportFailure({ kind: 'render' });
+        }
+        overlayIds[clips[i].id] = (await uploadOverlay(png)).overlayId;
+      }
+    } finally {
+      setActiveClipId(previousClipId);
+    }
+    return overlayIds;
   };
 
   const handleExport = async () => {
@@ -611,7 +647,10 @@ const App: React.FC = () => {
         }))
       });
 
-      // Step 1: Create export job
+      // Step 1: Design layer of every clip, then the job
+      const overlayIds = await renderClipOverlays(project.clips);
+      exportRequest.clips.forEach(clip => { clip.overlayId = overlayIds[clip.id]; });
+      setExportStep({ key: 'queued' });
       const { jobId } = await createExportJob(exportRequest);
       setExportJobId(jobId);
 

@@ -239,7 +239,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 6: Exportación real a .mp4
-**Estado:** 🟡 En progreso (reabierta el 2026-11-01, con aprobación del usuario)
+**Estado:** ✅ Completada (reabierta y cerrada el 2026-11-01, tras P1-03, P1-02 y P1-04)
 **Motivo de la reapertura:** la auditoría (E-03, E-04, E-06, E-41) mostró que el export no sale a 1080×1920, que la posición de los títulos no coincide con la preview y que las exportaciones con título fallaban sin fuente. Se cierra cuando estén completas P1-03, P1-02 y P1-04 de la sección "Auditoría — Prioridad 1".
 **Depende de:** Fase 5 completa. ✅
 **Verificación:** ✅ Código compilado sin errores TypeScript; implementación lista para testing
@@ -323,7 +323,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Auditoría — Prioridad 1 (funcionalidades principales)
-**Estado:** 🟡 En progreso
+**Estado:** ✅ Completada (2026-11-01). Pendientes anotados: decisión sobre `yt-dlp-ejs`, descargas reales de TikTok/Instagram sin verificar, E-37 (nombre del archivo descargado).
 **Origen:** `AUDIT_REPORT/12_PLAN_DE_DESARROLLO.md`, sección "PRIORIDAD 1". Aprobado por el usuario el 2026-11-01, con estas autorizaciones: `@types/react` y `@types/react-dom`, tests con `node:test` + `playwright` (ya instalado), una fuente libre en el repo, runtime JS para yt-dlp y descargas reales de prueba.
 **Rama de trabajo:** `codex/p1-estabilizacion`. Commits pequeños, sin push a `main` sin autorización.
 **Orden:** se corrigió el roadmap para respetar las dependencias: P1-03 va antes que P1-02.
@@ -340,7 +340,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 7 | P1-10 Preview fiel al trim | ✅ |
 | 8 | P1-03 Export normalizado 1080×1920 | ✅ |
 | 9 | P1-02 Coordenadas normalizadas | ✅ |
-| 10 | P1-04 Fidelidad visual del export | ⛔ Falta decidir qué elementos y con qué opción (a/b) |
+| 10 | P1-04 Fidelidad visual del export | ✅ |
 
 ### Registro de cambios
 (Cada tarea anota aquí el error original, la solución, los archivos y las pruebas)
@@ -556,8 +556,50 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
     - `vite build`: OK.
   - En la app real (panel del navegador, 1440×900) el proyecto del usuario se migró y los títulos se ven dentro del lienzo, en el mismo lugar.
 - **Límites conocidos:**
-  - Los títulos de una línea muy larga se parten en la preview (ancho máximo del lienzo), pero `drawtext` no parte líneas.
-  - Estilos, colores y mayúsculas de los presets todavía no llegan al export (P1-04).
+  - Los títulos de una línea muy larga se parten en la preview (ancho máximo del lienzo), pero `drawtext` no parte líneas. Con P1-04 el export usa la capa de la preview, así que esto solo afecta al modo sin capa.
+  - Estilos, colores y mayúsculas de los presets llegan al export con P1-04.
+
+**P1-04 — Fidelidad visual del export** ✅
+- **Requisito (del usuario, 2026-11-01):** el vídeo final reproduce fielmente los elementos visuales del diseño que aparecen en la preview, sin los controles del editor. Proyectos antiguos siguen funcionando.
+- **Error original, reproducido:** con el test nuevo sobre el código anterior, el fotograma exportado no tenía:
+  - la palabra resaltada en el color de acento;
+  - la caja azul del título del clip;
+  - la lista de rangos.
+  La cobertura medida fue 0 en los tres casos: el export solo dibujaba los dos títulos en blanco con `drawtext`, e ignoraba presets, palabras resaltadas, lista lateral y sombreado.
+- **Opción elegida: (b), capas renderizadas en el navegador.** La opción (a) (`drawtext`/`drawbox`) no puede reproducir varias palabras de colores en una línea, cajas con padding ni sombras difuminadas.
+  - `services/overlayRenderer.ts` (nuevo, sin librerías) copia el lienzo de la preview con sus estilos calculados en línea y sin el `<video>`. Lo envuelve en un SVG `<foreignObject>`, incrusta Inter (las caras latinas de Google Fonts, como data URL) y lo dibuja en un `<canvas>` de 1080×1920. El resultado es un PNG transparente con títulos, estilos, palabras resaltadas, lista de rangos y sombreado/degradado del vídeo.
+  - Al exportar, la preview pasa por cada clip (espera 600 ms a que termine la animación de la lista) y sube su capa a `POST /api/overlays`. Después vuelve al clip que estaba activo.
+  - Nuevo paso "Preparando el diseño N de M" en ES/EN, y error `render` traducido si el navegador no puede generar la capa.
+  - **Servidor:**
+    - `POST /api/overlays`: multer en memoria, máximo 8 MB y un archivo, cabecera de la app obligatoria y límite de 100 cada 15 min. Valida la firma PNG, 1080×1920 y RGBA, y guarda con nombre UUID en `storage/overlays`.
+    - `/api/export` acepta `overlayId` por clip y solo resuelve nombres UUID existentes.
+    - ffmpeg lo lee con `-f png_pipe` (nunca como patrón de `image2`) y lo superpone con `overlay` sobre el vídeo ya escalado y con el fondo.
+    - Las capas son de un solo uso: se borran al terminar o fallar el job, y las que nadie usó, al cabo de 1 h.
+  - **Compatibilidad:** sin `overlayId`, el servidor sigue dibujando los títulos con `drawtext` (P1-02), así que otros clientes y llamadas antiguas a la API siguen funcionando.
+- **Archivos:** `services/overlayRenderer.ts` (nuevo), `services/apiClient.ts` (`uploadOverlay`), `App.tsx` (`renderClipOverlays`, pasos y error), `types.ts`, `translations.ts`, `server/src/services/overlayService.ts` (nuevo), `server/src/routes/overlays.ts` (nuevo), `server/src/{index,config}.ts`, `server/src/routes/export.ts`, `server/src/services/{exportService,ffmpegService}.ts`, `server/tests/overlays.test.ts` (nuevo), `tests/e2e/export-fidelity.test.mjs` (nuevo), `tests/e2e/title-position.test.mjs`.
+- **Pruebas:**
+  - `export-fidelity.test.mjs`, con las cajas medidas en la preview y comparadas en el fotograma exportado:
+    - la palabra resaltada sale en rojo de acento (21 % de la caja);
+    - la caja azul del título del clip (72 %) y la del número de la lista (50 %);
+    - con 2 clips, cada segmento lleva su propia capa (caja azul en el clip 1, roja "Alert" en el clip 2) y la preview vuelve al clip que estaba activo.
+  - `title-position.test.mjs` ahora mide las cajas azules de los títulos estilados: preview 0,350/0,080 y 0,700/0,850; export 0,349/0,079 y 0,700/0,850.
+  - `overlays.test.ts` (servidor), 3 tests:
+    - acepta un PNG válido;
+    - rechaza no-PNG, tamaño incorrecto, sin alfa y sin cabecera (403), y no guarda los rechazados;
+    - rechaza `overlayId` con traversal o desconocidos;
+    - el píxel de la capa aparece sobre el vídeo y la capa se borra tras el export.
+  - Resultados:
+    - `npm run test:unit`: 14/14;
+    - `npm test` del servidor: 20/20;
+    - `npm run test:e2e`: 27/27;
+    - `tsc --strict`: 0 errores;
+    - builds del servidor y `vite build`: OK.
+  - Revisión visual del fotograma exportado: título QUICK con sombra, lista "1." con su caja, título del clip en caja azul y sombreado alrededor del vídeo, iguales a la preview.
+- **Límites conocidos:**
+  - La capa es fija durante cada clip: las animaciones de la preview (escala de la lista al cambiar de clip) no se animan en el vídeo.
+  - Con el trazo por defecto (2 px) sobre texto de 16 px, el contorno negro tapa casi todo el relleno; es igual en la preview y el export, y es una cuestión de diseño, no un fallo.
+  - `backdrop-blur` (fondo difuminado de algunos estilos de la lista) depende del soporte de Chrome dentro de `foreignObject`; no se verificó por separado.
+  - Si Google Fonts no responde, la capa se dibuja con la fuente de reserva del navegador y queda un aviso en la consola.
 
 ---
 

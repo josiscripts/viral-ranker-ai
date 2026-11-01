@@ -34,6 +34,8 @@ interface SegmentOptions {
   background: string;
   videoHeightPercent: number; // share of the canvas height the video covers, like the preview
   texts: TextLayer[];
+  // Transparent 1080x1920 PNG with the preview's design layer, drawn over the video
+  overlayPath?: string;
   onProgress?: (fraction: number) => void;
 }
 
@@ -144,14 +146,12 @@ export async function renderClipSegment(options: SegmentOptions): Promise<void> 
       `:borderw=${toFilterNumber(layer.stroke, 'stroke')}:bordercolor=black${getFontFileOption(layer.font)}`;
   });
 
-  const video = [
+  const base = [
     `scale=${OUTPUT_WIDTH}:${areaHeight}:force_original_aspect_ratio=increase:force_divisible_by=2`,
     `crop=${OUTPUT_WIDTH}:${areaHeight}`,
     `pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:0:(oh-ih)/2:color=0x${background}`,
     'setsar=1',
-    `fps=${OUTPUT_FPS}`,
-    'format=yuv420p',
-    ...drawTexts
+    `fps=${OUTPUT_FPS}`
   ].join(',');
   const audio = `aresample=${OUTPUT_SAMPLE_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,apad`;
 
@@ -161,11 +161,23 @@ export async function renderClipSegment(options: SegmentOptions): Promise<void> 
     '-protocol_whitelist', 'file',
     '-ss', String(startTime), '-t', String(duration), '-i', inputPath
   ];
+  let nextInput = 1;
+  let video = `[0:v]${[base, 'format=yuv420p', ...drawTexts].join(',')}[v]`;
+  if (options.overlayPath) {
+    // -f png_pipe reads the file as a single PNG, never as an image2 name pattern;
+    // overlay keeps repeating that one frame (eof_action=repeat) for the whole clip
+    args.push('-f', 'png_pipe', '-i', options.overlayPath);
+    video = `[0:v]${base}[base];[${nextInput}:v]format=rgba[layer];` +
+      `[base][layer]overlay=0:0:format=auto,${['format=yuv420p', ...drawTexts].join(',')}[v]`;
+    nextInput++;
+  }
+  let audioInput = '0:a';
   if (!withAudio) {
     args.push('-f', 'lavfi', '-t', String(duration), '-i', `anullsrc=channel_layout=stereo:sample_rate=${OUTPUT_SAMPLE_RATE}`);
+    audioInput = `${nextInput}:a`;
   }
   args.push(
-    '-filter_complex', `[0:v]${video}[v];[${withAudio ? '0' : '1'}:a]${audio}[a]`,
+    '-filter_complex', `${video};[${audioInput}]${audio}[a]`,
     '-map', '[v]', '-map', '[a]',
     '-t', String(duration),
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(OUTPUT_FPS),

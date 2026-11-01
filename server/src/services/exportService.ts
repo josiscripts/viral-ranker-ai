@@ -11,6 +11,7 @@ import {
   deleteDirectory
 } from './ffmpegService';
 import { resolveAssetPath } from './videoService';
+import { resolveOverlayPath, deleteOverlay, deleteStaleOverlays } from './overlayService';
 import { STORAGE_DIR, PROCESSING_DIR, EXPORTS_DIR } from '../config';
 
 // Machine-readable step, so the client can show it in the user's language
@@ -63,6 +64,9 @@ export interface ExportRequest {
     title: string;
     titleStyle?: { color: string };
     clipTitlePosition?: NormalizedPosition;
+    // Design layer of this clip from /api/overlays. With it, the titles come from
+    // the layer (as styled in the preview) and are not drawn again with drawtext.
+    overlayId?: string;
   }[];
 }
 
@@ -192,8 +196,12 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
       const stroke = request.titleStroke ?? 2;
       // Positions are the title centers as fractions of the canvas, as in the preview
       const clipTitlePosition = clip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION;
-      const texts: TextLayer[] = [{ text: request.title, ...request.titlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke }];
-      if (clip.title) texts.push({ text: clip.title, ...clipTitlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke });
+      const overlayPath = resolveOverlayPath(clip.overlayId) ?? undefined;
+      const texts: TextLayer[] = [];
+      if (!overlayPath) {
+        texts.push({ text: request.title, ...request.titlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke });
+        if (clip.title) texts.push({ text: clip.title, ...clipTitlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke });
+      }
 
       await renderClipSegment({
         inputPath: clipUrl,
@@ -205,6 +213,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
         background: request.background || '#000000',
         videoHeightPercent: request.videoHeight ?? 100,
         texts,
+        overlayPath,
         onProgress: reportProgress
       });
 
@@ -234,6 +243,9 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     failJob(jobId, errorMessage);
     throw error;
+  } finally {
+    // Overlays are single-use
+    request.clips.forEach(clip => deleteOverlay(clip.overlayId));
   }
 }
 
@@ -255,6 +267,7 @@ function cleanupExpiredJobs(): void {
   });
 
   expiredJobIds.forEach(jobId => jobs.delete(jobId));
+  deleteStaleOverlays();
   if (expiredJobIds.length > 0) {
     console.log(`Cleaned up ${expiredJobIds.length} expired export jobs`);
   }

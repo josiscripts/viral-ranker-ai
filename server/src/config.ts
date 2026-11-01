@@ -8,3 +8,4 @@ export const UPLOAD_DIR = path.join(STORAGE_DIR, 'uploads');
 export const UPLOAD_TMP_DIR = path.join(STORAGE_DIR, 'tmp');
 export const PROCESSING_DIR = path.join(STORAGE_DIR, 'processing');
 export const EXPORTS_DIR = path.join(STORAGE_DIR, 'exports');
+export const OVERLAYS_DIR = path.join(STORAGE_DIR, 'overlays');
