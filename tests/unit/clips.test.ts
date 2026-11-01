@@ -1,7 +1,7 @@
-// P1-09: ranks always 1..N in list order (E-12)
+// P1-09: ranks always 1..N in list order (E-12); P1-10: valid trims
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renumberClips, moveClip } from '../../utils/clips.ts';
+import { renumberClips, moveClip, clampTrim, initialTrim } from '../../utils/clips.ts';
 import type { Clip } from '../../types.ts';
 
 const clip = (id: string, rank: number): Clip => ({ id, url: '', startTime: 0, endTime: 1, rank, title: id });
@@ -34,4 +34,32 @@ test('moving past the ends or an unknown clip changes nothing', () => {
   assert.equal(moveClip(clips, 'a', -1), clips);
   assert.equal(moveClip(clips, 'b', 1), clips);
   assert.equal(moveClip(clips, 'x', 1), clips);
+});
+
+// P1-10: a trim can never be saved invalid (E-13, E-29, E-30)
+test('trim values are kept inside [0, duration]', () => {
+  assert.deepEqual(clampTrim(-3, 50, 20, 'start'), { startTime: 0, endTime: 20 });
+  assert.deepEqual(clampTrim(25, 30, 20, 'start'), { startTime: 19.9, endTime: 20 });
+});
+
+test('the edited side stops at the other one', () => {
+  assert.deepEqual(clampTrim(8, 5, 20, 'start'), { startTime: 4.9, endTime: 5 });
+  assert.deepEqual(clampTrim(8, 5, 20, 'end'), { startTime: 8, endTime: 8.1 });
+});
+
+test('valid trims are untouched and unknown durations only clamp at 0', () => {
+  assert.deepEqual(clampTrim(1.5, 4, 20, 'end'), { startTime: 1.5, endTime: 4 });
+  assert.deepEqual(clampTrim(30, 45, undefined, 'end'), { startTime: 30, endTime: 45 });
+});
+
+test('NaN input never produces NaN', () => {
+  const trim = clampTrim(NaN, NaN, 10, 'start');
+  assert.ok(Number.isFinite(trim.startTime) && Number.isFinite(trim.endTime));
+  assert.ok(trim.startTime < trim.endTime);
+});
+
+test('a new source starts at 0 and lasts up to 5 s, even without a duration', () => {
+  assert.deepEqual(initialTrim(12), { startTime: 0, endTime: 5 });
+  assert.deepEqual(initialTrim(2.345), { startTime: 0, endTime: 2.35 });
+  assert.deepEqual(initialTrim(0), { startTime: 0, endTime: 5 });
 });

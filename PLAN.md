@@ -337,7 +337,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 4 | P1-06 Descargas de mejor calidad | ✅ |
 | 5 | P1-08 Clip activo y operaciones asíncronas | ✅ |
 | 6 | P1-09 Rangos coherentes y reordenación | ✅ |
-| 7 | P1-10 Preview fiel al trim | 🔲 |
+| 7 | P1-10 Preview fiel al trim | ✅ |
 | 8 | P1-03 Export normalizado 1080×1920 | 🔲 |
 | 9 | P1-02 Coordenadas normalizadas | 🔲 |
 | 10 | P1-04 Fidelidad visual del export | ⛔ Falta decidir qué elementos y con qué opción (a/b) |
@@ -467,6 +467,24 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
     - `ranks.test.mjs` da 3/3 (borrar+añadir, mover con botones y extremos desactivados, migración de duplicados);
     - `tsc --strict` da 0 errores.
   - También hay capturas de los botones en tema claro y oscuro.
+
+**P1-10 — Preview fiel al trim** ✅
+- **Error original (E-10, E-13, E-28, E-29, E-30), reproducido:** con el test nuevo sobre el código anterior fallaron los 3 casos.
+  - La preview reproducía el vídeo entero en bucle: con un trim de 2–3 s, las muestras iban de 0,00 a 3,60.
+  - Los inputs guardaban un trim inválido (inicio 9 con fin 3).
+  - Al cambiar de fuente se mantenía `startTime` = 4 con un fin de 2 s.
+  - La barra de progreso solo cambiaba al re-renderizar.
+- **Solución:**
+  - `utils/clips.ts`: `clampTrim` limita a `[0, duración]` con inicio < fin (mínimo 0,1 s; el lado editado se detiene en el otro). `initialTrim` aplica 0–5 s al cargar una fuente, o 5 s si la duración es desconocida.
+  - En `ClipCard`, los inputs de trim son borradores que se validan al salir del campo o con Enter.
+  - La preview ya no usa `loop`: `onTimeUpdate`/`onEnded`/`onLoadedMetadata` la mantienen dentro del rango.
+  - La barra de progreso usa el estado `previewProgress` (posición dentro del trim).
+  - En los tests e2e, Chromium arranca con autoplay permitido para que la preview se reproduzca como tras un clic.
+- **Archivos:** `utils/clips.ts`, `App.tsx`, `tests/unit/clips.test.ts`, `tests/e2e/trim-preview.test.mjs` (nuevo), `tests/e2e/helpers.mjs`.
+- **Pruebas:**
+  - `npm run test:unit` da 10/10 y `npm run test:e2e` da 20/20.
+  - El e2e de la preview toma 30 muestras de `currentTime` en 3 s: todas dentro de [1,9; 3,3], y la barra pasa por más de 3 anchos distintos.
+  - `npm test` del servidor da 12/12, `tsc --strict` da 0 errores y `vite build` OK.
 
 ---
 

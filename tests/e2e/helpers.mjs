@@ -93,7 +93,8 @@ export async function startStack() {
 }
 
 export async function openApp({ projects, lang = 'en' } = {}) {
-  const browser = await chromium.launch();
+  // Autoplay with sound is allowed so the preview video plays as it does after a user click
+  const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   const consoleErrors = [];

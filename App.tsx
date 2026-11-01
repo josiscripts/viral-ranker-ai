@@ -69,7 +69,7 @@ import {
 import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
-import { renumberClips, moveClip } from './utils/clips';
+import { renumberClips, moveClip, clampTrim, initialTrim } from './utils/clips';
 
 const getClipLayoutConfig = (clipCount: number) => {
   if (clipCount <= 4) {
@@ -331,6 +331,8 @@ const App: React.FC = () => {
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [isPlaying, setIsPlaying] = useState(true);
+  // Playback position inside the active clip's trim, 0..1
+  const [previewProgress, setPreviewProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [showCaptions, setShowCaptions] = useState(true);
@@ -394,6 +396,24 @@ const App: React.FC = () => {
     }
   }, [activeClip?.startTime, activeClip?.endTime, activeClip?.url]);
 
+  // The preview loops over [startTime, endTime], like the exported clip
+  const handlePreviewTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (!activeClip) return;
+    const video = e.currentTarget;
+    const length = activeClip.endTime - activeClip.startTime;
+    if (video.currentTime >= activeClip.endTime || video.currentTime < activeClip.startTime - 0.25) {
+      video.currentTime = activeClip.startTime;
+    }
+    setPreviewProgress(length > 0 ? Math.min(1, Math.max(0, (video.currentTime - activeClip.startTime) / length)) : 0);
+  };
+
+  const handlePreviewRestart = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (!activeClip) return;
+    const video = e.currentTarget;
+    video.currentTime = activeClip.startTime;
+    if (e.type === 'ended' && isPlaying) video.play().catch(() => setIsPlaying(false));
+  };
+
   const handleTogglePlay = () => {
     if (videoRef.current) {
       if (isPlaying) videoRef.current.pause();
@@ -441,7 +461,7 @@ const App: React.FC = () => {
       console.log(`[DOWNLOAD] Iniciando descarga de ${url}`);
       const { videoUrl, duration, platform, filename } = await downloadVideoFromUrl(url.trim());
 
-      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, sourceUrl: url.trim(), duration, endTime: Math.min(duration, 5) });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, sourceUrl: url.trim(), duration, ...initialTrim(duration) });
       console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Download failed';
@@ -465,7 +485,7 @@ const App: React.FC = () => {
       console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`);
       const { videoUrl, duration, filename } = await uploadVideoFile(file);
 
-      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, duration, ...initialTrim(duration) });
       console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Upload failed';
@@ -1252,7 +1272,7 @@ const App: React.FC = () => {
                   )}
                 </div>
                 <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
-                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
+                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay playsInline className="w-full h-full object-cover" onLoadedMetadata={handlePreviewRestart} onTimeUpdate={handlePreviewTimeUpdate} onEnded={handlePreviewRestart} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
                 </div>
                 {(() => {
                   const layoutConfig = getClipLayoutConfig(project.clips.length);
@@ -1289,7 +1309,7 @@ const App: React.FC = () => {
                     <button onClick={handleTogglePlay} className="p-3 bg-white text-black rounded-full shadow-lg hover:scale-110 active:scale-90 transition-all">{isPlaying ? <PauseCircle size={24} fill="black" /> : <PlayCircle size={24} fill="black" />}</button>
                     <button onClick={() => { const nextIdx = (activeClipIndex + 1) % project.clips.length; if (project.clips[nextIdx]) setActiveClipId(project.clips[nextIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronRight size={24} /></button>
                   </div>
-                  <div className="px-4"><div className={`h-1.5 w-full rounded-full relative overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-black/10'}`}><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%' }}></div></div></div>
+                  <div className="px-4"><div className={`h-1.5 w-full rounded-full relative overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-black/10'}`}><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: `${previewProgress * 100}%` }}></div></div></div>
                 </div>
               </div>
             </div>
@@ -1336,6 +1356,21 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
   const isMenuOpen = menuOpenId === clip.id;
   const uploadErr = uploadError?.[clip.id];
   const downloadErr = downloadError?.[clip.id];
+  // Typed trim values are drafts until blur or Enter, then clamped to a valid range
+  const [startDraft, setStartDraft] = useState(String(clip.startTime));
+  const [endDraft, setEndDraft] = useState(String(clip.endTime));
+  useEffect(() => { setStartDraft(String(clip.startTime)); }, [clip.startTime]);
+  useEffect(() => { setEndDraft(String(clip.endTime)); }, [clip.endTime]);
+
+  const commitTrim = (edited: 'start' | 'end') => {
+    const startTime = edited === 'start' ? parseFloat(startDraft) : clip.startTime;
+    const endTime = edited === 'end' ? parseFloat(endDraft) : clip.endTime;
+    const trim = clampTrim(startTime, endTime, clip.duration, edited);
+    setStartDraft(String(trim.startTime));
+    setEndDraft(String(trim.endTime));
+    if (trim.startTime !== clip.startTime || trim.endTime !== clip.endTime) onUpdate(clip.id, trim);
+  };
+
   const handleSubmitUrl = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed || isDownloading || !onDownloadUrl) return;
@@ -1374,11 +1409,11 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
           <div className="grid grid-cols-2 gap-6" onClick={e => e.stopPropagation()}>
             <div className="space-y-2">
               <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Entrada" : "In-point"}</span>
-              <input type="number" step="0.1" value={clip.startTime} onChange={e => onUpdate(clip.id, { startTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+              <input type="number" step="0.1" min={0} max={clip.duration || undefined} value={startDraft} onChange={e => setStartDraft(e.target.value)} onBlur={() => commitTrim('start')} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
             </div>
             <div className="space-y-2">
               <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Salida" : "Out-point"}</span>
-              <input type="number" step="0.1" value={clip.endTime} onChange={e => onUpdate(clip.id, { endTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+              <input type="number" step="0.1" min={0} max={clip.duration || undefined} value={endDraft} onChange={e => setEndDraft(e.target.value)} onBlur={() => commitTrim('end')} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
             </div>
           </div>
           {clip.url && clip.duration && <TrimTimeline duration={clip.duration} startTime={clip.startTime} endTime={clip.endTime} onStartChange={(newStart: number) => onUpdate(clip.id, { startTime: newStart })} onEndChange={(newEnd: number) => onUpdate(clip.id, { endTime: newEnd })} isDarkMode={isDarkMode} />}
