@@ -22,10 +22,12 @@ const MIN_VIDEO_HEIGHT = 10;
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
+// Title centers are fractions of the canvas: { fx, fy } in [0, 1]
+const isFraction = (value: unknown): value is number => isFiniteNumber(value) && value >= 0 && value <= 1;
 const isValidPosition = (value: unknown): boolean => {
   if (!value || typeof value !== 'object') return false;
-  const position = value as { x?: unknown; y?: unknown };
-  return isFiniteNumber(position.x) && isFiniteNumber(position.y);
+  const position = value as { fx?: unknown; fy?: unknown };
+  return isFraction(position.fx) && isFraction(position.fy);
 };
 
 const isValidTitle = (value: unknown): value is string =>
@@ -70,7 +72,7 @@ router.post('/export', async (req: Request, res: Response) => {
 
     if (typeof projectId !== 'string' || !isValidTitle(title) || !isValidPosition(titlePosition)) {
       return res.status(400).json({
-        error: `Invalid project data: title must be text of at most ${MAX_TITLE_LENGTH} characters and titlePosition must have numeric x/y`
+        error: `Invalid project data: title must be text of at most ${MAX_TITLE_LENGTH} characters and titlePosition must have fx/fy between 0 and 1`
       });
     }
 
@@ -112,7 +114,7 @@ router.post('/export', async (req: Request, res: Response) => {
       }
       if (clip.clipTitlePosition !== undefined && !isValidPosition(clip.clipTitlePosition)) {
         return res.status(400).json({
-          error: `Clip "${clip.title}": clipTitlePosition must have numeric x/y`
+          error: `Clip "${clip.title}": clipTitlePosition must have fx/fy between 0 and 1`
         });
       }
       if (!resolveAssetPath(clip.assetId)) {

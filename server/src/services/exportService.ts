@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import {
   renderClipSegment,
   TextLayer,
+  TITLE_FONT_SIZE,
   concatenateClips,
   ensureDirectoryExists,
   deleteFile,
@@ -35,10 +36,19 @@ export interface ExportJob {
   expiresAt: Date;
 }
 
+// Center of a title as fractions of the canvas (0..1)
+export interface NormalizedPosition {
+  fx: number;
+  fy: number;
+}
+
+// Same default as the preview (utils/titleLayout.ts)
+const DEFAULT_CLIP_TITLE_POSITION: NormalizedPosition = { fx: 0.5, fy: 0.5 };
+
 export interface ExportRequest {
   projectId: string;
   title: string;
-  titlePosition: { x: number; y: number };
+  titlePosition: NormalizedPosition;
   titleStroke: number;
   background?: string; // hex color around the video
   videoHeight?: number; // % of the canvas height covered by the video
@@ -52,7 +62,7 @@ export interface ExportRequest {
     rank: number;
     title: string;
     titleStyle?: { color: string };
-    clipTitlePosition?: { x: number; y: number };
+    clipTitlePosition?: NormalizedPosition;
   }[];
 }
 
@@ -173,16 +183,6 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
       );
       reportProgress(0);
 
-      // Map pixel positions from 540px preview to 1080px video (normalized in P1-02)
-      const mainTitleX = Math.round((request.titlePosition.x / 540) * 1080);
-      const mainTitleY = Math.round((request.titlePosition.y / 540) * 1920) + 960;
-      const clipTitleX = clip.clipTitlePosition
-        ? Math.round((clip.clipTitlePosition.x / 540) * 1080)
-        : mainTitleX;
-      const clipTitleY = clip.clipTitlePosition
-        ? Math.round((clip.clipTitlePosition.y / 540) * 1920)
-        : mainTitleY + 100;
-
       const clipUrl = resolveAssetPath(clip.assetId);
       if (!clipUrl) {
         throw new Error(`Video file for clip "${clip.title}" was not found on the server`);
@@ -190,8 +190,10 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
 
       const finalPath = path.join(jobDir, `clip_${i}_final.mp4`);
       const stroke = request.titleStroke ?? 2;
-      const texts: TextLayer[] = [{ text: request.title, x: mainTitleX, y: mainTitleY, fontSize: 40, color: '#FFFFFF', stroke }];
-      if (clip.title) texts.push({ text: clip.title, x: clipTitleX, y: clipTitleY, fontSize: 32, color: '#FFFFFF', stroke });
+      // Positions are the title centers as fractions of the canvas, as in the preview
+      const clipTitlePosition = clip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION;
+      const texts: TextLayer[] = [{ text: request.title, ...request.titlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke }];
+      if (clip.title) texts.push({ text: clip.title, ...clipTitlePosition, fontSize: TITLE_FONT_SIZE, color: '#FFFFFF', stroke });
 
       await renderClipSegment({
         inputPath: clipUrl,

@@ -1,4 +1,10 @@
 
+// Point on the video canvas: 0,0 is the top-left corner and 1,1 the bottom-right
+export interface NormalizedPosition {
+  fx: number;
+  fy: number;
+}
+
 export interface Clip {
   id: string;
   url: string;
@@ -15,7 +21,8 @@ export interface Clip {
   rankStyleId?: string;
   titleStyleId?: string;
   titleItalic?: boolean;
-  clipTitlePosition?: { x: number, y: number };
+  // Center of the clip title as fractions of the canvas (0..1)
+  clipTitlePosition?: NormalizedPosition;
 }
 
 export interface CaptionStyle {
@@ -35,7 +42,8 @@ export interface Project {
   captionStyle: string;
   enableTitleDrag: boolean;
   titleStroke: number;
-  titlePosition: { x: number, y: number };
+  // Center of the main title as fractions of the canvas (0..1)
+  titlePosition: NormalizedPosition;
   highlightedIndices: number[];
 }
 
@@ -101,7 +109,7 @@ export interface VideoAssetResponse {
 export interface ExportRequest {
   projectId: string;
   title: string;
-  titlePosition: { x: number; y: number };
+  titlePosition: NormalizedPosition;
   titleStroke: number;
   background: string; // hex color shown around the video
   videoHeight: number; // % of the canvas height covered by the video
@@ -113,7 +121,7 @@ export interface ExportRequest {
     rank: number;
     title: string;
     titleStyle: { color: string };
-    clipTitlePosition?: { x: number; y: number };
+    clipTitlePosition?: NormalizedPosition;
   }[];
 }
 

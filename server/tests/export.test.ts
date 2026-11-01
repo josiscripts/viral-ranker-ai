@@ -49,13 +49,13 @@ const clip = (assetId: string, rank: number, startTime: number, endTime: number)
   rank,
   title: `CLIP ${rank}`,
   titleStyle: { color: '#FFFFFF' },
-  clipTitlePosition: { x: 0, y: 120 }
+  clipTitlePosition: { fx: 0.5, fy: 0.8 }
 });
 
 const exportBody = (overrides: Record<string, unknown> = {}) => ({
   projectId: 'proj_export',
   title: 'TOP 3',
-  titlePosition: { x: 0, y: -220 },
+  titlePosition: { fx: 0.5, fy: 0.22 },
   titleStroke: 2,
   background: '#FF0000',
   videoHeight: 70,
@@ -116,8 +116,14 @@ test('the video fills the layout height and the background color shows around it
   }
 });
 
-test('export rejects an invalid background color or layout height', async () => {
-  for (const overrides of [{ background: 'red;drawtext' }, { background: 123 }, { videoHeight: 5 }, { videoHeight: '70' }]) {
+test('export rejects invalid layout values and title positions', async () => {
+  const invalid = [
+    { background: 'red;drawtext' }, { background: 123 }, { videoHeight: 5 }, { videoHeight: '70' },
+    { titlePosition: { fx: '0.5:textfile=/etc/passwd', fy: 0.5 } },
+    { titlePosition: { x: 0, y: -220 } }, // legacy pixel offsets
+    { titlePosition: { fx: 1.5, fy: 0.5 } }
+  ];
+  for (const overrides of invalid) {
     const res = await postJson(server.baseUrl, '/api/export', exportBody(overrides));
     assert.equal(res.status, 400, JSON.stringify(overrides));
   }

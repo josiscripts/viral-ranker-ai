@@ -92,10 +92,10 @@ export async function startStack() {
   return { storageDir, backendOutput: backend.output, stop };
 }
 
-export async function openApp({ projects, lang = 'en' } = {}) {
+export async function openApp({ projects, lang = 'en', viewport } = {}) {
   // Autoplay with sound is allowed so the preview video plays as it does after a user click
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
-  const context = await browser.newContext({ acceptDownloads: true });
+  const context = await browser.newContext({ acceptDownloads: true, ...(viewport ? { viewport } : {}) });
   const page = await context.newPage();
   const consoleErrors = [];
   page.on('pageerror', error => consoleErrors.push(String(error)));
@@ -135,7 +135,7 @@ export const makeProject = (clips, overrides = {}) => ({
   captionStyle: 'BLUE_BOX',
   enableTitleDrag: false,
   titleStroke: 2,
-  titlePosition: { x: 0, y: -220 },
+  titlePosition: { fx: 0.5, fy: 0.22 },
   highlightedIndices: [],
   ...overrides
 });

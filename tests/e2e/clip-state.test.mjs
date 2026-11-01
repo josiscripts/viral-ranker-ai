@@ -97,7 +97,7 @@ test('switching project during a download does not touch the other project', asy
 
 test('after switching project the clip title of the new project can be dragged', async () => {
   const projectA = makeProject([makeClip('a1', 1, { title: 'A FIRST' }), makeClip('a2', 2, { title: 'A SECOND' })], { id: 'proj_a', title: 'PROJECT A', enableTitleDrag: true });
-  const projectB = makeProject([makeClip('b1', 1, { title: 'B FIRST', clipTitlePosition: { x: 0, y: 0 } })], { id: 'proj_b', title: 'PROJECT B', enableTitleDrag: true });
+  const projectB = makeProject([makeClip('b1', 1, { title: 'B FIRST', clipTitlePosition: { fx: 0.5, fy: 0.5 } })], { id: 'proj_b', title: 'PROJECT B', enableTitleDrag: true });
   const { browser, page } = await openApp({ projects: [projectA, projectB] });
   try {
     await page.getByRole('button', { name: 'Editor', exact: true }).click();
@@ -114,7 +114,7 @@ test('after switching project the clip title of the new project can be dragged',
     await page.waitForTimeout(300);
 
     const [, storedB] = await storedProjects(page);
-    assert.ok(Math.abs(storedB.clips[0].clipTitlePosition.y) > 20, JSON.stringify(storedB.clips[0].clipTitlePosition));
+    assert.ok(storedB.clips[0].clipTitlePosition.fy > 0.52, JSON.stringify(storedB.clips[0].clipTitlePosition));
   } finally {
     await browser.close();
   }

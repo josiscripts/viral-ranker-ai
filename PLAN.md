@@ -339,7 +339,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 6 | P1-09 Rangos coherentes y reordenación | ✅ |
 | 7 | P1-10 Preview fiel al trim | ✅ |
 | 8 | P1-03 Export normalizado 1080×1920 | ✅ |
-| 9 | P1-02 Coordenadas normalizadas | 🔲 |
+| 9 | P1-02 Coordenadas normalizadas | ✅ |
 | 10 | P1-04 Fidelidad visual del export | ⛔ Falta decidir qué elementos y con qué opción (a/b) |
 
 ### Registro de cambios
@@ -523,6 +523,41 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
     - build del servidor y `vite build`: OK.
   - `server/storage` queda intacto: 42 uploads y 4 exports antes y después.
 - **No verificado:** la mezcla con clips reales de TikTok e Instagram (el criterio original); se usaron fixtures con las mismas diferencias de formato.
+
+**Fuente incluida (Inter, OFL)** ✅
+- **Problema:** el export dependía de Arial/DejaVu del sistema o de `FONT_FILE` (E-41), y la preview usa Inter.
+- **Solución:** Inter 4.1 (`Inter-Bold`, `Inter-BoldItalic`, `Inter-Medium`) en `server/assets/fonts/`, con `OFL.txt` y un `README.md` de procedencia y hashes SHA-256. Viene del release oficial `rsms/inter` v4.1; el tamaño del zip coincide con el que publica GitHub y la licencia es SIL OFL 1.1.
+  - Orden de búsqueda: `FONT_FILE` (si está definida, para todas las variantes), luego Inter incluida, luego fuentes del sistema.
+  - Cada capa de texto puede pedir una variante (`bold`, `boldItalic`, `medium`).
+- **Archivos:** `server/assets/fonts/*` (nuevos), `server/src/services/ffmpegService.ts`, `server/tests/ffmpegService.test.ts`, `server/README.md`, `server/.env.example`.
+- **Pruebas:** test unitario de la resolución de la fuente (con y sin `FONT_FILE`). El export con títulos hostiles se renderiza con Inter. `npm test` del servidor: 17/17.
+
+**P1-02 — Coordenadas normalizadas** ✅
+- **Error original (E-04):** los títulos se guardaban como píxeles de desplazamiento desde el centro de la preview, y la preview cambia de tamaño con la ventana. Medido en el panel del navegador: el lienzo medía 160×306 px y el título por defecto (`y: -220`) quedaba **fuera del lienzo**. El servidor usaba otra referencia (540 px, con `+960` solo en el título principal), así que preview y export no coincidían.
+- **Solución:**
+  - Las posiciones son el **centro del texto en fracciones del lienzo**, `{fx, fy}` ∈ [0, 1] (`NormalizedPosition` en `types.ts`).
+  - La capa de títulos y la lista de rangos se dibujan en un "escenario" fijo de 432×768 (`utils/titleLayout.ts`, el tamaño de escritorio) escalado al lienzo con CSS. Así el texto conserva tamaño y lugar relativos con cualquier ventana.
+  - El lienzo es ahora exactamente 9:16 dentro del marco: antes medía 432×790, porque el `aspect-ratio` incluía el borde.
+  - El arrastre calcula la fracción y la limita para que el texto quede entero dentro del lienzo.
+  - **Migración:** los proyectos guardados con `{x, y}` se convierten al cargar (referencia 432×790, el lienzo de escritorio anterior); el título por defecto pasa a `fy` 0,2215, el mismo lugar que antes.
+  - **Export:** `x=w*fx-text_w/2`, `y=h*fy-text_h/2`, con `text_align=C` para títulos de varias líneas y tamaño 40 px (16 px del escenario × 2,5). El servidor valida `fx`/`fy` entre 0 y 1 y rechaza el formato antiguo.
+  - El arrastre del título del clip usa `updateClipInProject` (P1-08).
+- **Archivos:** `utils/titleLayout.ts` (nuevo), `types.ts`, `App.tsx` (migración, lienzo, escenario, arrastre, render), `server/src/routes/export.ts`, `server/src/services/{exportService,ffmpegService}.ts`, `tests/unit/titleLayout.test.ts` (nuevo), `tests/e2e/title-position.test.mjs` (nuevo), `tests/e2e/{helpers,clip-state}.test.mjs`, `server/tests/{api,export}.test.ts`.
+- **Pruebas:**
+  - `title-position.test.mjs`:
+    - un proyecto con píxeles antiguos se migra a `{0.5, 0.2215}` / `{0.75, 0.5}`;
+    - con lienzos de 612, 407 y 160 px, el centro y la altura relativos de los títulos son idénticos (0,350/0,150 y 0,700/0,850; altura 0,0417);
+    - **fotograma exportado frente a preview:** título principal 0,350/0,150 en ambos; título del clip 0,700/0,850 en la preview y 0,699/0,850 en el export (tolerancia ±2 %).
+  - Resultados:
+    - `npm run test:unit`: 14/14 (4 nuevos);
+    - `npm run test:e2e`: 25/25;
+    - `npm test` del servidor: 17/17 (posiciones inyectadas, formato antiguo y valores fuera de rango devuelven 400);
+    - `tsc --strict`: 0 errores;
+    - `vite build`: OK.
+  - En la app real (panel del navegador, 1440×900) el proyecto del usuario se migró y los títulos se ven dentro del lienzo, en el mismo lugar.
+- **Límites conocidos:**
+  - Los títulos de una línea muy larga se parten en la preview (ancho máximo del lienzo), pero `drawtext` no parte líneas.
+  - Estilos, colores y mayúsculas de los presets todavía no llegan al export (P1-04).
 
 ---
 

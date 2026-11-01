@@ -70,6 +70,7 @@ import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
 import { renumberClips, moveClip, clampTrim, initialTrim } from './utils/clips';
+import { PREVIEW_STAGE, DEFAULT_TITLE_POSITION, DEFAULT_CLIP_TITLE_POSITION, clampPosition, migratePosition } from './utils/titleLayout';
 
 const getClipLayoutConfig = (clipCount: number) => {
   if (clipCount <= 4) {
@@ -151,7 +152,7 @@ const createNewProject = (id: string): Project => ({
   captionStyle: 'BLUE_BOX',
   enableTitleDrag: false,
   titleStroke: 2,
-  titlePosition: { x: 0, y: -220 }, 
+  titlePosition: DEFAULT_TITLE_POSITION,
   highlightedIndices: []
 });
 
@@ -165,7 +166,7 @@ const INITIAL_PROJECTS: Project[] = [
     captionStyle: 'RANDOM_COLOR',
     enableTitleDrag: false,
     titleStroke: 2,
-    titlePosition: { x: 0, y: -220 }, 
+    titlePosition: DEFAULT_TITLE_POSITION,
     highlightedIndices: [1]
   }
 ];
@@ -188,15 +189,23 @@ const getClipAssetId = (clip: Clip): string | undefined => {
 const LEGACY_MEDIA_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1):3001(\/api\/files\/[^?#]+)$/;
 
 const migrateLegacyClip = (clip: Clip): Clip => {
+  // Title positions used to be pixel offsets that depended on the window size (E-04)
+  const positioned = clip.clipTitlePosition === undefined
+    ? clip
+    : { ...clip, clipTitlePosition: migratePosition(clip.clipTitlePosition, DEFAULT_CLIP_TITLE_POSITION) };
   const match = typeof clip.url === 'string' ? clip.url.match(LEGACY_MEDIA_URL) : null;
-  if (!match) return clip;
-  const migrated = { ...clip, url: match[1] };
+  if (!match) return positioned;
+  const migrated = { ...positioned, url: match[1] };
   return { ...migrated, assetId: clip.assetId || getClipAssetId(migrated) };
 };
 
 // Also renumbers ranks: older versions could save duplicated ranks (E-12)
 const migrateLegacyProjects = (projects: Project[]): Project[] =>
-  projects.map(project => Array.isArray(project.clips) ? { ...project, clips: renumberClips(project.clips.map(migrateLegacyClip)) } : project);
+  projects.map(project => ({
+    ...project,
+    titlePosition: migratePosition(project.titlePosition, DEFAULT_TITLE_POSITION),
+    ...(Array.isArray(project.clips) ? { clips: renumberClips(project.clips.map(migrateLegacyClip)) } : {})
+  }));
 
 // Clips the server would reject, checked before anything is sent
 const getExportIssues = (clips: Clip[]): ExportValidationIssue[] =>
@@ -351,6 +360,18 @@ const App: React.FC = () => {
   const titleElementRef = useRef<HTMLDivElement>(null);
   const clipTitleElementRef = useRef<HTMLDivElement>(null);
   const [isDraggingClipTitle, setIsDraggingClipTitle] = useState(false);
+  // Canvas width / stage width: the overlay is laid out on PREVIEW_STAGE and scaled to the canvas
+  const [previewScale, setPreviewScale] = useState(1);
+  const previewObserverRef = useRef<ResizeObserver | null>(null);
+  const setPreviewContainer = useCallback((node: HTMLDivElement | null) => {
+    previewContainerRef.current = node;
+    previewObserverRef.current?.disconnect();
+    previewObserverRef.current = null;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => setPreviewScale(entry.contentRect.width / PREVIEW_STAGE.width));
+    observer.observe(node);
+    previewObserverRef.current = observer;
+  }, []);
   const [clipTitleDragStart, setClipTitleDragStart] = useState<{ x: number, y: number } | null>(null);
 
   const t = translations[lang];
@@ -672,24 +693,11 @@ const App: React.FC = () => {
       if (isDragging && previewContainerRef.current && titleElementRef.current) {
         const containerRect = previewContainerRef.current.getBoundingClientRect();
         const titleRect = titleElementRef.current.getBoundingClientRect();
-
-        let x = e.clientX - containerRect.left - containerRect.width / 2 - dragOffset.x;
-        let y = e.clientY - containerRect.top - containerRect.height / 2 - dragOffset.y;
-
-        const titleWidth = titleRect.width;
-        const titleHeight = titleRect.height;
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-
-        const maxX = containerWidth / 2 - titleWidth / 2;
-        const minX = -containerWidth / 2 + titleWidth / 2;
-        const maxY = containerHeight / 2 - titleHeight / 2;
-        const minY = -containerHeight / 2 + titleHeight / 2;
-
-        x = Math.max(minX, Math.min(maxX, x));
-        y = Math.max(minY, Math.min(maxY, y));
-
-        updateCurrentProject({ titlePosition: { x, y } });
+        const titlePosition = clampPosition({
+          fx: (e.clientX - dragOffset.x - containerRect.left) / containerRect.width,
+          fy: (e.clientY - dragOffset.y - containerRect.top) / containerRect.height
+        }, titleRect.width / 2 / containerRect.width, titleRect.height / 2 / containerRect.height);
+        updateCurrentProject({ titlePosition });
       }
     };
     const handleGlobalMouseUp = () => setIsDragging(false);
@@ -708,27 +716,11 @@ const App: React.FC = () => {
       if (isDraggingClipTitle && previewContainerRef.current && clipTitleElementRef.current && activeClipId) {
         const containerRect = previewContainerRef.current.getBoundingClientRect();
         const clipTitleRect = clipTitleElementRef.current.getBoundingClientRect();
-
-        let x = e.clientX - containerRect.left - containerRect.width / 2 - (clipTitleDragStart?.x || 0);
-        let y = e.clientY - containerRect.top - containerRect.height / 2 - (clipTitleDragStart?.y || 0);
-
-        const titleWidth = clipTitleRect.width;
-        const titleHeight = clipTitleRect.height;
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-
-        const maxX = containerWidth / 2 - titleWidth / 2;
-        const minX = -containerWidth / 2 + titleWidth / 2;
-        const maxY = containerHeight / 2 - titleHeight / 2;
-        const minY = -containerHeight / 2 + titleHeight / 2;
-
-        x = Math.max(minX, Math.min(maxX, x));
-        y = Math.max(minY, Math.min(maxY, y));
-
-        const updatedClips = project.clips.map(clip =>
-          clip.id === activeClipId ? { ...clip, clipTitlePosition: { x, y } } : clip
-        );
-        updateCurrentProject({ clips: updatedClips });
+        const clipTitlePosition = clampPosition({
+          fx: (e.clientX - (clipTitleDragStart?.x || 0) - containerRect.left) / containerRect.width,
+          fy: (e.clientY - (clipTitleDragStart?.y || 0) - containerRect.top) / containerRect.height
+        }, clipTitleRect.width / 2 / containerRect.width, clipTitleRect.height / 2 / containerRect.height);
+        updateClipInProject(project.id, activeClipId, { clipTitlePosition });
       }
     };
     const handleClipTitleMouseUp = () => setIsDraggingClipTitle(false);
@@ -740,7 +732,7 @@ const App: React.FC = () => {
       window.removeEventListener('mousemove', handleClipTitleMouseMove);
       window.removeEventListener('mouseup', handleClipTitleMouseUp);
     };
-  }, [isDraggingClipTitle, clipTitleDragStart, activeClipId, project.clips]);
+  }, [isDraggingClipTitle, clipTitleDragStart, activeClipId, project.id]);
 
   const toggleHighlight = (index: number) => {
     const newIndices = project.highlightedIndices.includes(index)
@@ -775,11 +767,13 @@ const App: React.FC = () => {
       <div
         ref={titleElementRef}
         onMouseDown={handleDragStart}
-        className={`relative inline-block ${currentStyle.shadow} ${project.enableTitleDrag ? 'cursor-move active:scale-95' : 'pointer-events-auto'}`}
+        className={`absolute w-max pointer-events-auto ${currentStyle.shadow} ${project.enableTitleDrag ? 'cursor-move' : ''}`}
         style={{
-          transform: `translate(${project.titlePosition.x}px, ${project.titlePosition.y}px)`,
-          zIndex: 60,
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+          left: project.titlePosition.fx * PREVIEW_STAGE.width,
+          top: project.titlePosition.fy * PREVIEW_STAGE.height,
+          maxWidth: PREVIEW_STAGE.width,
+          transform: 'translate(-50%, -50%)',
+          zIndex: 60
         }}
       >
         <div 
@@ -1257,26 +1251,29 @@ const App: React.FC = () => {
             {/* Video Preview Container */}
             <div className="w-full lg:w-[540px] p-10 lg:sticky lg:top-0 h-fit z-20 flex flex-col items-center gap-4">
               {/* Preview Visual */}
-              <div ref={previewContainerRef} className="relative aspect-[9/16] rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full flex flex-col items-center justify-center select-none flex-shrink-0" style={{ backgroundColor: project.background }}>
-                <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
-                  <div className="pointer-events-auto">{renderViralTitle()}</div>
+              <div className="relative rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full select-none flex-shrink-0">
+              <div ref={setPreviewContainer} className="relative w-full aspect-[9/16] overflow-hidden flex flex-col items-center justify-center" style={{ backgroundColor: project.background }}>
+                <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
+                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay playsInline className="w-full h-full object-cover" onLoadedMetadata={handlePreviewRestart} onTimeUpdate={handlePreviewTimeUpdate} onEnded={handlePreviewRestart} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
+                </div>
+                {/* Overlay stage: laid out at PREVIEW_STAGE size, scaled to the canvas */}
+                <div className="absolute top-0 left-0 z-50 pointer-events-none origin-top-left" style={{ width: PREVIEW_STAGE.width, height: PREVIEW_STAGE.height, transform: `scale(${previewScale})` }}>
+                  {renderViralTitle()}
                   {activeClip && activeClip.title && (
                     <div
                       ref={clipTitleElementRef}
                       onMouseDown={handleClipTitleDragStart}
-                      className={`absolute px-4 py-2 rounded-sm tracking-tighter pointer-events-auto cursor-move ${isDraggingClipTitle ? 'select-none' : ''} transition-transform duration-100`}
+                      className={`absolute w-max px-4 py-2 rounded-sm tracking-tighter pointer-events-auto cursor-move ${isDraggingClipTitle ? 'select-none' : ''}`}
                       style={{
-                        transform: `translate(${activeClip.clipTitlePosition?.x || 0}px, ${activeClip.clipTitlePosition?.y || 0}px)`,
-                        transition: isDraggingClipTitle ? 'none' : 'transform 0.1s ease-out'
+                        left: (activeClip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION).fx * PREVIEW_STAGE.width,
+                        top: (activeClip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION).fy * PREVIEW_STAGE.height,
+                        maxWidth: PREVIEW_STAGE.width,
+                        transform: 'translate(-50%, -50%)'
                       }}
                     >
                       {renderClipTitle()}
                     </div>
                   )}
-                </div>
-                <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
-                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay playsInline className="w-full h-full object-cover" onLoadedMetadata={handlePreviewRestart} onTimeUpdate={handlePreviewTimeUpdate} onEnded={handlePreviewRestart} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
-                </div>
                 {(() => {
                   const layoutConfig = getClipLayoutConfig(project.clips.length);
                   const fontSizeMap: Record<string, number> = { 'text-5xl': 64, 'text-4xl': 48, 'text-3xl': 30, 'text-2xl': 24 };
@@ -1302,6 +1299,8 @@ const App: React.FC = () => {
                     </div>
                   );
                 })()}
+                </div>
+              </div>
               </div>
 
               {/* Control Panel - OUTSIDE Preview */}

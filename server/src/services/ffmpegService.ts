@@ -7,11 +7,17 @@ export const OUTPUT_HEIGHT = 1920;
 const OUTPUT_FPS = 30;
 const OUTPUT_SAMPLE_RATE = 48000;
 const SEGMENT_TIMEOUT_MS = 5 * 60 * 1000;
+// The preview lays titles out on a 432x768 stage (utils/titleLayout.ts), 2.5x
+// smaller than the output: 16 px text there is 40 px here, and its 24 px line
+// height leaves ~12 px between lines on top of Inter's own line height.
+export const TITLE_FONT_SIZE = 40;
+const TITLE_LINE_SPACING = 12;
 
 export interface TextLayer {
   text: string;
-  x: number; // output pixels, top-left of the text
-  y: number;
+  // Center of the text as fractions of the canvas, like the preview
+  fx: number;
+  fy: number;
   fontSize: number;
   color: string;
   stroke: number;
@@ -43,6 +49,14 @@ const toFilterNumber = (value: number, name: string): number => {
     throw new Error(`Invalid numeric value for ${name}`);
   }
   return Math.round(value);
+};
+
+// Positions only reach the filter graph as plain decimals in [0, 1]
+const toFilterFraction = (value: number, name: string): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`Invalid position value for ${name}`);
+  }
+  return value.toFixed(4);
 };
 
 // Only hex colors (with or without "#") or "white" ever reach the filter graph.
@@ -124,7 +138,8 @@ export async function renderClipSegment(options: SegmentOptions): Promise<void> 
   const drawTexts = texts.map((layer, index) => {
     const file = `${textFilePrefix}_text${index}.txt`;
     fs.writeFileSync(path.join(workDir, file), layer.text.replace(/\r/g, ''), 'utf-8');
-    return `drawtext=textfile=${file}:expansion=none:x=${toFilterNumber(layer.x, 'x')}:y=${toFilterNumber(layer.y, 'y')}` +
+    return `drawtext=textfile=${file}:expansion=none:x=w*${toFilterFraction(layer.fx, 'fx')}-text_w/2:y=h*${toFilterFraction(layer.fy, 'fy')}-text_h/2` +
+      `:text_align=C:line_spacing=${TITLE_LINE_SPACING}` +
       `:fontsize=${toFilterNumber(layer.fontSize, 'fontSize')}:fontcolor=${toFilterColor(layer.color, 'FFFFFF')}` +
       `:borderw=${toFilterNumber(layer.stroke, 'stroke')}:bordercolor=black${getFontFileOption(layer.font)}`;
   });

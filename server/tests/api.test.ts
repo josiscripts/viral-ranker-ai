@@ -27,13 +27,13 @@ const clip = (assetId: string, rank: number, title: string) => ({
   rank,
   title,
   titleStyle: { color: '#FFFFFF' },
-  clipTitlePosition: { x: 0, y: 120 }
+  clipTitlePosition: { fx: 0.5, fy: 0.8 }
 });
 
 const exportBody = () => ({
   projectId: 'proj_test',
   title: 'TOP 2 "Bro\'s" 100% : a,b;[x]\nLINE $(echo X) `id` %{pts}',
-  titlePosition: { x: 0, y: -220 },
+  titlePosition: { fx: 0.5, fy: 0.22 },
   titleStroke: 2,
   clips: [clip(assetA, 1, "Bro's internet: 50% \\ 'q'"), clip(assetB, 2, 'C:\\temp; [in] , "quoted" $(whoami)')]
 });
