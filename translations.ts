@@ -110,6 +110,7 @@ export const translations = {
     exportErrorTimeout: "The export took too long. The server may be busy.",
     exportRetry: "Retry",
     exportDismiss: "Close",
+    downloadFromLink: "Download video from link",
   },
   es: {
     // Navigation / Sidebar
@@ -222,5 +223,6 @@ export const translations = {
     exportErrorTimeout: "La exportación tardó demasiado. El servidor puede estar muy ocupado.",
     exportRetry: "Reintentar",
     exportDismiss: "Cerrar",
+    downloadFromLink: "Descargar video del enlace",
   }
 };

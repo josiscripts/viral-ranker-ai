@@ -333,7 +333,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | B | Tipado del frontend (`@types/react`) | ✅ |
 | 1 | P1-01 Mostrar errores de exportación | ✅ |
 | 2 | P1-07 Cliente API, proxy de Vite y build del servidor | ✅ |
-| 3 | P1-05 Entrada de URL robusta | 🔲 |
+| 3 | P1-05 Entrada de URL robusta | ✅ |
 | 4 | P1-06 Descargas de mejor calidad | 🔲 |
 | 5 | P1-08 Clip activo y operaciones asíncronas | 🔲 |
 | 6 | P1-09 Rangos coherentes y reordenación | 🔲 |
@@ -401,6 +401,20 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   - `npm run test:e2e` da 7/7. Lo nuevo: un proyecto antiguo con URL absoluta se migra y su vídeo carga por el proxy (200/206); upload desde la UI y export van solo a `localhost:3000/api/...`, con 0 peticiones a `:3001`.
   - `npm test` del servidor da 8/8 y `tsc --strict` da 0 errores.
 - **Pendiente detectado:** E-37 sigue abierto. El archivo exportado se descarga como `<jobId>.mp4` porque `Content-Disposition` del servidor manda sobre el atributo `download`. No forma parte de P1-07.
+
+**P1-05 — Entrada de URL robusta** ✅
+- **Error original (E-05), reproducido:** con el test nuevo sobre el código anterior, escribir el enlace tecla a tecla ya lanzaba `POST /api/download` a mitad de escritura (1 petición antes de terminar). Además, cada tecla sobrescribía `clip.url` (la URL servida del vídeo) y el campo mostraba la URL del backend en lugar del enlace original.
+- **Solución:**
+  - En `ClipCard`, el texto escrito queda en estado local (`urlDraft`). La descarga empieza solo con Enter, con el botón nuevo (icono `Download`, con `aria-label` traducido) o al pegar un enlace en el campo vacío o totalmente seleccionado.
+  - El enlace original se guarda en `Clip.sourceUrl` y es lo que muestra el campo; `clip.url` sigue siendo la URL del vídeo servido.
+- **Archivos:** `types.ts` (`sourceUrl`), `App.tsx` (`ClipCard`, `handleDownloadUrl`), `translations.ts` (`downloadFromLink`), `tests/e2e/url-input.test.mjs` (nuevo).
+- **Pruebas:** en `url-input.test.mjs`, `/api/download` está simulado, así que no se contacta con YouTube.
+  - Con el código anterior, 2 de 3 tests fallaron.
+  - Con la corrección:
+    - escribir no manda nada y Enter manda una sola petición, con el enlace exacto;
+    - pegar descarga una vez;
+    - el botón descarga.
+  - `npm run test:e2e` da 10/10 y `tsc --strict` da 0 errores. También hay capturas del campo en tema claro y oscuro.
 
 ---
 

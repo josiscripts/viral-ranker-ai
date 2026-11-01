@@ -4,6 +4,8 @@ export interface Clip {
   url: string;
   // Server-side file name returned by /api/upload or /api/download; exports reference clips by this id
   assetId?: string;
+  // Link the user pasted (YouTube/TikTok/Instagram) that the video was downloaded from
+  sourceUrl?: string;
   thumbnail?: string;
   startTime: number;
   endTime: number;
