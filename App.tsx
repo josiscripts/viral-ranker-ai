@@ -415,8 +415,8 @@ const App: React.FC = () => {
         console.error(`[DOWNLOAD] Failed to parse success response:`, parseErr);
         throw new Error('Invalid response from server');
       }
-    } catch (err: any) {
-      const errorMsg = err.message || 'Download failed';
+    } catch (err) {
+      const errorMsg = (err instanceof Error && err.message) || 'Download failed';
       setDownloadErrors({ ...downloadErrors, [clipId]: errorMsg });
       console.error(`[DOWNLOAD] Download error for clip ${clipId}:`, errorMsg);
     } finally {
@@ -482,8 +482,8 @@ const App: React.FC = () => {
         console.error(`[UPLOAD] Failed to parse success response:`, parseErr);
         throw new Error('Invalid response from server');
       }
-    } catch (err: any) {
-      const errorMsg = err.message || 'Upload failed';
+    } catch (err) {
+      const errorMsg = (err instanceof Error && err.message) || 'Upload failed';
       setUploadErrors({ ...uploadErrors, [clipId]: errorMsg });
       console.error(`[UPLOAD] Upload error for clip ${clipId}:`, errorMsg);
       console.error(`[UPLOAD] Full error object:`, err);
@@ -535,7 +535,7 @@ const App: React.FC = () => {
         titlePosition: exportRequest.titlePosition,
         titleStroke: exportRequest.titleStroke,
         clipsCount: exportRequest.clips.length,
-        clips: exportRequest.clips.map((c: any) => ({
+        clips: exportRequest.clips.map(c => ({
           id: c.id,
           assetId: c.assetId,
           startTime: c.startTime,
@@ -591,8 +591,9 @@ const App: React.FC = () => {
             link.click();
             document.body.removeChild(link);
           } else if (status.status === 'error') {
-            lastError = status.error || 'Unknown export error';
-            throw new Error(lastError);
+            const jobError: string = status.error || 'Unknown export error';
+            lastError = jobError;
+            throw new Error(jobError);
           }
         } catch (pollError) {
           const pollMessage = pollError instanceof Error ? pollError.message : 'Unknown error';
@@ -1301,7 +1302,7 @@ const ToolbarDropdown: React.FC<{ label?: string | React.ReactNode, icon?: React
   <button className={`flex items-center gap-1 p-2 rounded-lg transition-all ${isDarkMode ? 'text-gray-500 hover:bg-white/5 hover:text-white' : 'text-gray-600 hover:bg-white hover:text-black'}`}>{label || icon} <ChevronDown size={14} className="opacity-50" /></button>
 );
 
-const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: any, onRemove: any, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, uploadingClipId?: string | null, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, downloadingClipId?: string | null, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, uploadingClipId, uploadError, onDownloadUrl, downloadingClipId, downloadError }) => {
+const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, uploadingClipId?: string | null, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, downloadingClipId?: string | null, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, uploadingClipId, uploadError, onDownloadUrl, downloadingClipId, downloadError }) => {
   const [sourceTab, setSourceTab] = useState<'url' | 'upload'>('url');
   const isMenuOpen = menuOpenId === clip.id;
   const isUploading = uploadingClipId === clip.id;

@@ -330,7 +330,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 
 | Paso | Tarea | Estado |
 |---|---|---|
-| B | Tipado del frontend (`@types/react`) | 🔲 |
+| B | Tipado del frontend (`@types/react`) | ✅ |
 | 1 | P1-01 Mostrar errores de exportación | 🔲 |
 | 2 | P1-07 Cliente API, proxy de Vite y build del servidor | 🔲 |
 | 3 | P1-05 Entrada de URL robusta | 🔲 |
@@ -344,6 +344,18 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 
 ### Registro de cambios
 (Cada tarea anota aquí el error original, la solución, los archivos y las pruebas)
+
+**B — Tipado del frontend** ✅
+- **Error original:** sin `@types/react`, React no tenía tipos y `tsc` daba 0 errores aunque hubiera fallos de props o hooks (E-42). Comprobado con un archivo de prueba: un `setN("x")` sobre `useState(0)` no daba error.
+- **Solución:** se instalaron `@types/react@19.3.0` y `@types/react-dom@19.3.0` (devDependencies). Con ellos, el modo actual da 0 errores y `--strict` daba 2 errores reales, que se corrigieron junto con los `any` sin justificar:
+  - `ClipCard`: `onUpdate`/`onRemove` tipados;
+  - `catch (err: any)` → `err instanceof Error`;
+  - `(c: any)` quitado;
+  - `lastError` del polling;
+  - `p.id as any` en `ProfileView`.
+  Se quitó de `ErrorBoundary.tsx` el `declare props`, que ya no hace falta.
+- **Archivos:** `package.json`, `package-lock.json`, `App.tsx`, `ProfileView.tsx`, `ErrorBoundary.tsx`.
+- **Pruebas:** `tsc --noEmit` (normal y `--strict`) da 0 errores; `tsc` del servidor da 0 errores; `vite build` OK. `strict` no se activó en `tsconfig.json` (eso es P3-02).
 
 ---
 

@@ -14,8 +14,6 @@ interface ErrorBoundaryState {
 // It lives outside <App/>, so theme and language are read from the same
 // localStorage keys App uses.
 class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  // @types/react is not installed, so React.Component is untyped: declare props explicitly
-  declare props: Readonly<ErrorBoundaryProps>;
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(): ErrorBoundaryState {
