@@ -239,7 +239,8 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 6: Exportación real a .mp4
-**Estado:** ✅ Completa
+**Estado:** 🟡 En progreso (reabierta el 2026-11-01, con aprobación del usuario)
+**Motivo de la reapertura:** la auditoría (E-03, E-04, E-06, E-41) mostró que el export no sale a 1080×1920, que la posición de los títulos no coincide con la preview y que las exportaciones con título fallaban sin fuente. Se cierra cuando estén completas P1-03, P1-02 y P1-04 de la sección "Auditoría — Prioridad 1".
 **Depende de:** Fase 5 completa. ✅
 **Verificación:** ✅ Código compilado sin errores TypeScript; implementación lista para testing
 
@@ -318,6 +319,31 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 - `/translations.ts` — textos del Error Boundary (ES/EN)
 - `/ProfileView.tsx` — placeholders genéricos
 - `/vite.config.ts` — sin `host: '0.0.0.0'`, `strictPort: true`
+
+---
+
+## Auditoría — Prioridad 1 (funcionalidades principales)
+**Estado:** 🟡 En progreso
+**Origen:** `AUDIT_REPORT/12_PLAN_DE_DESARROLLO.md`, sección "PRIORIDAD 1". Aprobado por el usuario el 2026-11-01, con estas autorizaciones: `@types/react` y `@types/react-dom`, tests con `node:test` + `playwright` (ya instalado), una fuente libre en el repo, runtime JS para yt-dlp y descargas reales de prueba.
+**Rama de trabajo:** `codex/p1-estabilizacion`. Commits pequeños, sin push a `main` sin autorización.
+**Orden:** se corrigió el roadmap para respetar las dependencias: P1-03 va antes que P1-02.
+
+| Paso | Tarea | Estado |
+|---|---|---|
+| B | Tipado del frontend (`@types/react`) | 🔲 |
+| 1 | P1-01 Mostrar errores de exportación | 🔲 |
+| 2 | P1-07 Cliente API, proxy de Vite y build del servidor | 🔲 |
+| 3 | P1-05 Entrada de URL robusta | 🔲 |
+| 4 | P1-06 Descargas de mejor calidad | 🔲 |
+| 5 | P1-08 Clip activo y operaciones asíncronas | 🔲 |
+| 6 | P1-09 Rangos coherentes y reordenación | 🔲 |
+| 7 | P1-10 Preview fiel al trim | 🔲 |
+| 8 | P1-03 Export normalizado 1080×1920 | 🔲 |
+| 9 | P1-02 Coordenadas normalizadas | 🔲 |
+| 10 | P1-04 Fidelidad visual del export | ⛔ Falta decidir qué elementos y con qué opción (a/b) |
+
+### Registro de cambios
+(Cada tarea anota aquí el error original, la solución, los archivos y las pruebas)
 
 ---
 
