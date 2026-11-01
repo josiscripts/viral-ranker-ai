@@ -2,8 +2,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import {
-  trimClip,
-  addTextOverlay,
+  renderClipSegment,
+  TextLayer,
   concatenateClips,
   ensureDirectoryExists,
   deleteFile,
@@ -40,6 +40,8 @@ export interface ExportRequest {
   title: string;
   titlePosition: { x: number; y: number };
   titleStroke: number;
+  background?: string; // hex color around the video
+  videoHeight?: number; // % of the canvas height covered by the video
   clips: {
     id: string;
     // Stored file name returned by /api/upload or /api/download. The server only
@@ -158,13 +160,22 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     const processedClips: string[] = [];
     const totalClips = sortedClips.length;
 
+    // Real progress: clip segments take 0-90 %, weighted by their trimmed length
+    const totalSeconds = sortedClips.reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
+    let doneSeconds = 0;
+
     for (let i = 0; i < sortedClips.length; i++) {
       const clip = sortedClips[i];
-      updateJobProgress(jobId, (i / totalClips) * 60, `Processing clip ${i + 1}/${totalClips}`, { key: 'processingClip', clip: i + 1, total: totalClips });
+      const clipSeconds = clip.endTime - clip.startTime;
+      const step: ExportStep = { key: 'processingClip', clip: i + 1, total: totalClips };
+      const reportProgress = (fraction: number) => updateJobProgress(
+        jobId, ((doneSeconds + clipSeconds * fraction) / totalSeconds) * 90, `Processing clip ${i + 1}/${totalClips}`, step
+      );
+      reportProgress(0);
 
-      // Map pixel positions from 540px preview to 1080px video
+      // Map pixel positions from 540px preview to 1080px video (normalized in P1-02)
       const mainTitleX = Math.round((request.titlePosition.x / 540) * 1080);
-      const mainTitleY = Math.round((request.titlePosition.y / 540) * 1920) + 960;      
+      const mainTitleY = Math.round((request.titlePosition.y / 540) * 1920) + 960;
       const clipTitleX = clip.clipTitlePosition
         ? Math.round((clip.clipTitlePosition.x / 540) * 1080)
         : mainTitleX;
@@ -172,56 +183,35 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
         ? Math.round((clip.clipTitlePosition.y / 540) * 1920)
         : mainTitleY + 100;
 
-      const trimmedPath = path.join(jobDir, `clip_${i}_trimmed.mp4`);
-      const finalPath = path.join(jobDir, `clip_${i}_final.mp4`);
-
       const clipUrl = resolveAssetPath(clip.assetId);
       if (!clipUrl) {
         throw new Error(`Video file for clip "${clip.title}" was not found on the server`);
       }
 
-      console.log(`\nProcessing clip ${i + 1}/${sortedClips.length}:`);
-      console.log('  Rank:', clip.rank);
-      console.log('  Title:', clip.title);
-      console.log('  Input URL:', clipUrl);
-      console.log('  Trimmed output:', trimmedPath);
-      console.log('  Final output:', finalPath);
-      console.log('  Trim range: [', clip.startTime, '-', clip.endTime, ']');
+      const finalPath = path.join(jobDir, `clip_${i}_final.mp4`);
+      const stroke = request.titleStroke ?? 2;
+      const texts: TextLayer[] = [{ text: request.title, x: mainTitleX, y: mainTitleY, fontSize: 40, color: '#FFFFFF', stroke }];
+      if (clip.title) texts.push({ text: clip.title, x: clipTitleX, y: clipTitleY, fontSize: 32, color: '#FFFFFF', stroke });
 
-      // Trim the clip
-      await trimClip({
+      await renderClipSegment({
         inputPath: clipUrl,
-        outputPath: trimmedPath,
-        startTime: clip.startTime,
-        endTime: clip.endTime
-      });
-      console.log('  ✓ Trim completed');
-
-      // Add text overlay
-      await addTextOverlay({
-        inputPath: trimmedPath,
         outputPath: finalPath,
         workDir: jobDir,
         textFilePrefix: `clip_${i}`,
-        mainTitle: request.title,
-        mainTitleX,
-        mainTitleY,
-        clipTitle: clip.title,
-        clipTitleX,
-        clipTitleY,
-        mainTitleColor: '#FFFFFF',
-        mainTitleStroke: request.titleStroke || 2,
-        clipTitleColor: '#FFFFFF',
-        clipTitleStroke: request.titleStroke || 2
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        background: request.background || '#000000',
+        videoHeightPercent: request.videoHeight ?? 100,
+        texts,
+        onProgress: reportProgress
       });
 
-      // Clean up trimmed file
-      deleteFile(trimmedPath);
+      doneSeconds += clipSeconds;
       processedClips.push(finalPath);
     }
 
     // Step 2: Concatenate all clips
-    updateJobProgress(jobId, 70, 'Concatenating clips', { key: 'concatenating' });
+    updateJobProgress(jobId, 92, 'Concatenating clips', { key: 'concatenating' });
 
     const outputPath = path.join(EXPORTS_DIR, `${jobId}.mp4`);
     await concatenateClips({
@@ -230,7 +220,7 @@ export async function processExportJob(jobId: string, request: ExportRequest): P
     });
 
     // Step 3: Clean up processing directory
-    updateJobProgress(jobId, 90, 'Cleaning up', { key: 'cleaningUp' });
+    updateJobProgress(jobId, 98, 'Cleaning up', { key: 'cleaningUp' });
     processedClips.forEach(deleteFile);
     deleteDirectory(jobDir);
 

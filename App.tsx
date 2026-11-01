@@ -559,6 +559,9 @@ const App: React.FC = () => {
         title: project.title,
         titlePosition: project.titlePosition,
         titleStroke: project.titleStroke,
+        // Old or hand-edited projects may hold values the server rejects
+        background: /^#[0-9A-Fa-f]{6}$/.test(project.background) ? project.background : '#000000',
+        videoHeight: Number.isFinite(project.videoHeight) ? Math.min(100, Math.max(10, project.videoHeight)) : 100,
         clips: project.clips.map((clip: Clip) => ({
           id: clip.id,
           assetId: getClipAssetId(clip),

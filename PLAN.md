@@ -338,7 +338,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 5 | P1-08 Clip activo y operaciones asíncronas | ✅ |
 | 6 | P1-09 Rangos coherentes y reordenación | ✅ |
 | 7 | P1-10 Preview fiel al trim | ✅ |
-| 8 | P1-03 Export normalizado 1080×1920 | 🔲 |
+| 8 | P1-03 Export normalizado 1080×1920 | ✅ |
 | 9 | P1-02 Coordenadas normalizadas | 🔲 |
 | 10 | P1-04 Fidelidad visual del export | ⛔ Falta decidir qué elementos y con qué opción (a/b) |
 
@@ -485,6 +485,44 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   - `npm run test:unit` da 10/10 y `npm run test:e2e` da 20/20.
   - El e2e de la preview toma 30 muestras de `currentTime` en 3 s: todas dentro de [1,9; 3,3], y la barra pasa por más de 3 anchos distintos.
   - `npm test` del servidor da 12/12, `tsc --strict` da 0 errores y `vite build` OK.
+
+**P1-03 — Export normalizado 1080×1920** ✅
+- **Error original (E-03, E-06, E-18), reproducido:** con el test nuevo sobre el código anterior fallaron los 3 casos.
+  - Tres clips distintos (640×360 a 48 kHz, 720×1280 a 25 fps y 44,1 kHz, 480×480 sin audio) exportaban a **640 px de ancho**: no había `scale`/`pad` ni `fps`.
+  - El color de fondo y la altura del vídeo del proyecto no llegaban al servidor.
+  - Un `background` como `red;drawtext` se aceptaba (200).
+  - Además, el concat con `-c copy` unía segmentos con resoluciones y audio distintos, y el progreso solo cambiaba entre pasos (0/60/70/90 %).
+- **Solución:**
+  - `renderClipSegment` hace **una sola pasada de ffmpeg por clip**:
+    - recorte con `-ss/-t`;
+    - escala a cubrir el área de vídeo y recorte (igual que `object-cover` de la preview), con la altura `videoHeight` % del lienzo;
+    - `pad` a 1080×1920 centrado con el color `background`;
+    - `fps=30` y `yuv420p`, con los títulos por `drawtext` (texto literal, como en P0-05);
+    - audio AAC 48 kHz estéreo con `apad` hasta la duración del clip, o una pista silenciosa (`anullsrc`) si la fuente no tiene audio.
+  - Como todos los segmentos son idénticos, el concat copia sin recodificar y añade `+faststart`.
+  - **Progreso real:** `-progress pipe:1` se lee mientras corre ffmpeg (`runProcess` acepta `onStdout`). Los clips ocupan el 0–90 %, ponderados por la duración recortada; luego unir (92 %) y limpiar (98 %).
+  - Cada clip tiene un tiempo máximo de 5 min.
+  - El cliente envía `background` y `videoHeight`. Si un proyecto antiguo tiene valores inválidos, se usa `#000000` y la altura se limita a 10–100.
+  - El servidor valida `background` (`#RRGGBB`) y `videoHeight` (10–100), y si faltan usa negro y el 100 %.
+  - Se eliminaron `trimClip` y `addTextOverlay`, que quedaron sin uso.
+  - Las posiciones de los títulos mantienen el mapeo en px anterior; las corrige P1-02.
+- **Archivos:** `server/src/services/{ffmpegService,exportService,processRunner}.ts`, `server/src/routes/export.ts`, `types.ts` (`ExportRequest`), `App.tsx` (`handleExport`), `server/tests/{export,ffmpegService}.test.ts` (nuevos), `server/tests/helpers.ts`, `tests/e2e/export-layout.test.mjs` (nuevo).
+- **Pruebas:**
+  - `export.test.ts` usa `ffprobe` sobre el MP4 descargado:
+    - 1080×1920, 30 fps, duración 3,7 s ±0,1 (suma de los trims), audio AAC de 48 kHz y 2 canales, y la pista de audio dura lo mismo que la de vídeo (±0,1 s);
+    - los clips con audio conservan sonido y el clip sin audio es silencio;
+    - el fondo aparece arriba y abajo en los 3 clips y no dentro del área de vídeo;
+    - el progreso toma al menos 4 valores distintos durante el job;
+    - los valores inválidos devuelven 400.
+  - El test de títulos hostiles de P0 sigue pasando con el pipeline nuevo.
+  - Resultados:
+    - `npm test` del servidor: 16/16;
+    - `npm run test:unit`: 10/10;
+    - `npm run test:e2e`: 22/22 (incluye `export-layout`: el payload lleva el fondo y la altura, y un proyecto antiguo exporta igual);
+    - `tsc --strict` del frontend y `tsc` del servidor: 0 errores;
+    - build del servidor y `vite build`: OK.
+  - `server/storage` queda intacto: 42 uploads y 4 exports antes y después.
+- **No verificado:** la mezcla con clips reales de TikTok e Instagram (el criterio original); se usaron fixtures con las mismas diferencias de formato.
 
 ---
 

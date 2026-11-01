@@ -8,6 +8,8 @@ export interface ProcessResult {
 export interface RunProcessOptions {
   timeoutMs?: number;
   cwd?: string;
+  // Receives stdout as it arrives (the full output is still returned at the end)
+  onStdout?: (chunk: string) => void;
 }
 
 export class ProcessError extends Error {
@@ -34,7 +36,7 @@ export function runProcess(
   options: RunProcessOptions = {}
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       bin,
       args,
       {
@@ -52,5 +54,6 @@ export function runProcess(
         }
       }
     );
+    if (options.onStdout) child.stdout?.on('data', options.onStdout);
   });
 }

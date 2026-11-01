@@ -1,6 +1,6 @@
 // Shared helpers for the server tests: a real server process on a random port
 // with its own temporary storage (never server/storage), and ffmpeg fixtures.
-import { spawn, execFileSync } from 'child_process';
+import { spawn, spawnSync, execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -60,10 +60,17 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
 // Short H.264/AAC test clip generated with ffmpeg's lavfi sources.
 export function makeVideoFixture(
   filePath: string,
-  { seconds = 2, width = 640, height = 360, audio = true }: { seconds?: number; width?: number; height?: number; audio?: boolean } = {}
+  {
+    seconds = 2,
+    width = 640,
+    height = 360,
+    fps = 30,
+    audio = true,
+    sampleRate = 44100
+  }: { seconds?: number; width?: number; height?: number; fps?: number; audio?: boolean; sampleRate?: number } = {}
 ): string {
-  const args = ['-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', `testsrc=size=${width}x${height}:rate=30:duration=${seconds}`];
-  if (audio) args.push('-f', 'lavfi', '-i', `sine=frequency=440:duration=${seconds}`, '-c:a', 'aac');
+  const args = ['-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', `testsrc=size=${width}x${height}:rate=${fps}:duration=${seconds}`];
+  if (audio) args.push('-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=${sampleRate}:duration=${seconds}`, '-c:a', 'aac');
   args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-shortest', '-y', filePath);
   execFileSync('ffmpeg', args, { windowsHide: true });
   return filePath;
@@ -72,8 +79,13 @@ export function makeVideoFixture(
 export interface ProbeResult {
   width: number;
   height: number;
+  fps: number;
   duration: number;
+  videoDuration: number;
   hasAudio: boolean;
+  audioSampleRate: number;
+  audioChannels: number;
+  audioDuration: number;
 }
 
 export function probeVideo(filePath: string): ProbeResult {
@@ -82,16 +94,50 @@ export function probeVideo(filePath: string): ProbeResult {
     windowsHide: true
   });
   const info = JSON.parse(raw) as {
-    streams: { codec_type: string; width?: number; height?: number }[];
+    streams: {
+      codec_type: string;
+      width?: number;
+      height?: number;
+      r_frame_rate?: string;
+      duration?: string;
+      sample_rate?: string;
+      channels?: number;
+    }[];
     format: { duration: string };
   };
   const video = info.streams.find(stream => stream.codec_type === 'video');
+  const audio = info.streams.find(stream => stream.codec_type === 'audio');
+  const [fpsNum, fpsDen] = (video?.r_frame_rate ?? '0/1').split('/').map(Number);
   return {
     width: video?.width ?? 0,
     height: video?.height ?? 0,
+    fps: fpsDen ? fpsNum / fpsDen : 0,
     duration: Number(info.format.duration),
-    hasAudio: info.streams.some(stream => stream.codec_type === 'audio')
+    videoDuration: Number(video?.duration ?? 0),
+    hasAudio: Boolean(audio),
+    audioSampleRate: Number(audio?.sample_rate ?? 0),
+    audioChannels: audio?.channels ?? 0,
+    audioDuration: Number(audio?.duration ?? 0)
   };
+}
+
+// RGB of one pixel of the frame shown at `seconds`
+export function samplePixel(filePath: string, seconds: number, x: number, y: number): [number, number, number] {
+  const raw = execFileSync('ffmpeg', [
+    '-hide_banner', '-v', 'error', '-ss', String(seconds), '-i', filePath,
+    '-frames:v', '1', '-vf', `crop=2:2:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'
+  ], { windowsHide: true });
+  return [raw[0], raw[1], raw[2]];
+}
+
+// Mean audio volume in dB of [start, start + seconds] (-Infinity is digital silence)
+export function meanVolume(filePath: string, start: number, seconds: number): number {
+  const result = spawnSync('ffmpeg', [
+    '-hide_banner', '-nostats', '-ss', String(start), '-t', String(seconds), '-i', filePath,
+    '-af', 'volumedetect', '-vn', '-f', 'null', '-'
+  ], { encoding: 'utf-8', windowsHide: true });
+  const match = /mean_volume:\s*(-?[\d.]+|-inf) dB/.exec(result.stderr);
+  return match && match[1] !== '-inf' && Number(match[1]) > -90 ? Number(match[1]) : -Infinity;
 }
 
 export async function uploadFile(baseUrl: string, filePath: string, fileName = path.basename(filePath)) {
@@ -110,12 +156,18 @@ export async function postJson(baseUrl: string, route: string, body: unknown) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-export async function waitForExport(baseUrl: string, jobId: string, timeoutMs = 120_000) {
+export async function waitForExport(
+  baseUrl: string,
+  jobId: string,
+  timeoutMs = 120_000,
+  onStatus?: (job: Record<string, unknown>) => void
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const job = (await (await fetch(`${baseUrl}/api/export/${jobId}`)).json()) as Record<string, unknown>;
+    onStatus?.(job);
     if (job.status === 'completed' || job.status === 'error') return job;
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
   throw new Error(`Export ${jobId} did not finish in ${timeoutMs} ms`);
 }

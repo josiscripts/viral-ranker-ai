@@ -16,6 +16,9 @@ const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // Control characters are rejected; a line break is allowed because the main title can span lines
 const FORBIDDEN_TITLE_CHARS = /[\u0000-\u0009\u000B-\u001F\u007F]/;
 
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+const MIN_VIDEO_HEIGHT = 10;
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
@@ -46,7 +49,7 @@ router.post('/export', async (req: Request, res: Response) => {
       clipsFields: req.body?.clips?.[0] ? Object.keys(req.body.clips[0]) : 'none'
     });
 
-    const { projectId, title, titlePosition, titleStroke, clips } = req.body as ExportRequest;
+    const { projectId, title, titlePosition, titleStroke, background, videoHeight, clips } = req.body as ExportRequest;
 
     // Validate input
     console.log('DEBUG: Validation checks - projectId:', !!projectId, 'title:', !!title, 'titlePosition:', !!titlePosition, 'clips:', clips?.length);
@@ -75,6 +78,14 @@ router.post('/export', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `titleStroke must be an integer between 0 and ${MAX_TITLE_STROKE}`
       });
+    }
+
+    if (background !== undefined && (typeof background !== 'string' || !HEX_COLOR.test(background))) {
+      return res.status(400).json({ error: 'background must be a hex color like #000000' });
+    }
+
+    if (videoHeight !== undefined && (!isFiniteNumber(videoHeight) || videoHeight < MIN_VIDEO_HEIGHT || videoHeight > 100)) {
+      return res.status(400).json({ error: `videoHeight must be a number between ${MIN_VIDEO_HEIGHT} and 100` });
     }
 
     // Validate clips

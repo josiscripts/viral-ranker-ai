@@ -103,6 +103,8 @@ export interface ExportRequest {
   title: string;
   titlePosition: { x: number; y: number };
   titleStroke: number;
+  background: string; // hex color shown around the video
+  videoHeight: number; // % of the canvas height covered by the video
   clips: {
     id: string;
     assetId?: string;
