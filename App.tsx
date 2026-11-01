@@ -316,9 +316,10 @@ const App: React.FC = () => {
   });
   const [activeTab, setActiveTab] = useState('home'); 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [uploadingClipId, setUploadingClipId] = useState<string | null>(null);
+  // Per clip, so several uploads/downloads can run at the same time
+  const [uploadingClipIds, setUploadingClipIds] = useState<Record<string, boolean>>({});
   const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
-  const [downloadingClipId, setDownloadingClipId] = useState<string | null>(null);
+  const [downloadingClipIds, setDownloadingClipIds] = useState<Record<string, boolean>>({});
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -366,10 +367,9 @@ const App: React.FC = () => {
   const activeClipIndex = useMemo(() => project.clips.findIndex(c => c.id === activeClipId), [project.clips, activeClipId]);
   const activeClip = useMemo(() => project.clips[activeClipIndex] || project.clips[0], [project.clips, activeClipIndex]);
 
+  // The active clip belongs to the open project: select its first clip on every switch
   useEffect(() => {
-    if (project.clips.length > 0 && !activeClipId) {
-      setActiveClipId(project.clips[0].id);
-    }
+    setActiveClipId(project.clips[0]?.id ?? null);
   }, [project.id]);
 
   useEffect(() => {
@@ -404,14 +404,32 @@ const App: React.FC = () => {
     setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, ...updates } : p));
   };
 
-  const handleUpdateClip = async (id: string, updates: Partial<Clip>) => {
-    const updatedClips = project.clips.map(c => c.id === id ? { ...c, ...updates } : c);
-    updateCurrentProject({ clips: updatedClips });
+  // Updates one clip on top of the latest state. Async results (upload, download)
+  // use the project and clip they started on, so edits made meanwhile, or a switch
+  // to another project, are never overwritten.
+  const updateClipInProject = (projectId: string, clipId: string, updates: Partial<Clip>) => {
+    setProjects(prev => prev.map(p => p.id === projectId
+      ? { ...p, clips: p.clips.map(c => c.id === clipId ? { ...c, ...updates } : c) }
+      : p));
+  };
+
+  const setClipFlag = (setFlags: React.Dispatch<React.SetStateAction<Record<string, boolean>>>, clipId: string, value: boolean) => {
+    setFlags(prev => {
+      const next = { ...prev };
+      if (value) next[clipId] = true;
+      else delete next[clipId];
+      return next;
+    });
+  };
+
+  const handleUpdateClip = (id: string, updates: Partial<Clip>) => {
+    updateClipInProject(project.id, id, updates);
   };
 
   const handleDownloadUrl = async (clipId: string, url: string) => {
-    setDownloadingClipId(clipId);
-    setDownloadErrors({ ...downloadErrors, [clipId]: '' });
+    const projectId = project.id;
+    setClipFlag(setDownloadingClipIds, clipId, true);
+    setDownloadErrors(prev => ({ ...prev, [clipId]: '' }));
 
     try {
       if (!url || !url.trim()) {
@@ -421,24 +439,21 @@ const App: React.FC = () => {
       console.log(`[DOWNLOAD] Iniciando descarga de ${url}`);
       const { videoUrl, duration, platform, filename } = await downloadVideoFromUrl(url.trim());
 
-      const updatedClips = project.clips.map(c =>
-        c.id === clipId ? { ...c, url: videoUrl, assetId: filename, sourceUrl: url.trim(), duration, endTime: Math.min(duration, 5) } : c
-      );
-      updateCurrentProject({ clips: updatedClips });
-      setDownloadErrors({ ...downloadErrors, [clipId]: '' });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, sourceUrl: url.trim(), duration, endTime: Math.min(duration, 5) });
       console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Download failed';
-      setDownloadErrors({ ...downloadErrors, [clipId]: errorMsg });
+      setDownloadErrors(prev => ({ ...prev, [clipId]: errorMsg }));
       console.error(`[DOWNLOAD] Download error for clip ${clipId}:`, errorMsg);
     } finally {
-      setDownloadingClipId(null);
+      setClipFlag(setDownloadingClipIds, clipId, false);
     }
   };
 
   const handleFileUpload = async (clipId: string, file: File) => {
-    setUploadingClipId(clipId);
-    setUploadErrors({ ...uploadErrors, [clipId]: '' });
+    const projectId = project.id;
+    setClipFlag(setUploadingClipIds, clipId, true);
+    setUploadErrors(prev => ({ ...prev, [clipId]: '' }));
 
     try {
       if (file.type !== 'video/mp4') {
@@ -448,18 +463,14 @@ const App: React.FC = () => {
       console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`);
       const { videoUrl, duration, filename } = await uploadVideoFile(file);
 
-      const updatedClips = project.clips.map(c =>
-        c.id === clipId ? { ...c, url: videoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
-      );
-      updateCurrentProject({ clips: updatedClips });
-      setUploadErrors({ ...uploadErrors, [clipId]: '' });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) });
       console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Upload failed';
-      setUploadErrors({ ...uploadErrors, [clipId]: errorMsg });
+      setUploadErrors(prev => ({ ...prev, [clipId]: errorMsg }));
       console.error(`[UPLOAD] Upload error for clip ${clipId}:`, errorMsg);
     } finally {
-      setUploadingClipId(null);
+      setClipFlag(setUploadingClipIds, clipId, false);
     }
   };
 
@@ -1204,10 +1215,10 @@ const App: React.FC = () => {
                     onOpenMenu={setMenuOpenId}
                     lang={lang}
                     onFileUpload={handleFileUpload}
-                    uploadingClipId={uploadingClipId}
+                    isUploading={Boolean(uploadingClipIds[clip.id])}
                     uploadError={uploadErrors}
                     onDownloadUrl={handleDownloadUrl}
-                    downloadingClipId={downloadingClipId}
+                    isDownloading={Boolean(downloadingClipIds[clip.id])}
                     downloadError={downloadErrors}
                   />
                 ))}
@@ -1312,14 +1323,12 @@ const ToolbarDropdown: React.FC<{ label?: string | React.ReactNode, icon?: React
   <button className={`flex items-center gap-1 p-2 rounded-lg transition-all ${isDarkMode ? 'text-gray-500 hover:bg-white/5 hover:text-white' : 'text-gray-600 hover:bg-white hover:text-black'}`}>{label || icon} <ChevronDown size={14} className="opacity-50" /></button>
 );
 
-const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, uploadingClipId?: string | null, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, downloadingClipId?: string | null, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, uploadingClipId, uploadError, onDownloadUrl, downloadingClipId, downloadError }) => {
+const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, isUploading?: boolean, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, isDownloading?: boolean, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, isUploading = false, uploadError, onDownloadUrl, isDownloading = false, downloadError }) => {
   const [sourceTab, setSourceTab] = useState<'url' | 'upload'>('url');
   // What the user types stays local: a download starts only on Enter, paste or the button
   const [urlDraft, setUrlDraft] = useState(clip.sourceUrl ?? '');
   useEffect(() => { setUrlDraft(clip.sourceUrl ?? ''); }, [clip.sourceUrl]);
   const isMenuOpen = menuOpenId === clip.id;
-  const isUploading = uploadingClipId === clip.id;
-  const isDownloading = downloadingClipId === clip.id;
   const uploadErr = uploadError?.[clip.id];
   const downloadErr = downloadError?.[clip.id];
   const handleSubmitUrl = (value: string) => {

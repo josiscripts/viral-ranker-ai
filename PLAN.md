@@ -335,7 +335,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 2 | P1-07 Cliente API, proxy de Vite y build del servidor | ✅ |
 | 3 | P1-05 Entrada de URL robusta | ✅ |
 | 4 | P1-06 Descargas de mejor calidad | ✅ |
-| 5 | P1-08 Clip activo y operaciones asíncronas | 🔲 |
+| 5 | P1-08 Clip activo y operaciones asíncronas | ✅ |
 | 6 | P1-09 Rangos coherentes y reordenación | 🔲 |
 | 7 | P1-10 Preview fiel al trim | 🔲 |
 | 8 | P1-03 Export normalizado 1080×1920 | 🔲 |
@@ -438,6 +438,20 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   - `npm test` da 12/12 (4 unitarios nuevos: hosts, look-alikes y extracción de errores).
 - **No verificado:** TikTok e Instagram (no se probó con enlaces reales).
 - **Pendiente de decisión:** `yt-dlp-ejs` (scripts del solver; `deno` ya está instalado). Sin él, yt-dlp avisa `n challenge solving failed` y algunos formatos o vídeos de YouTube pueden faltar. Es una dependencia nueva de Python, no autorizada explícitamente.
+
+**P1-08 — Estado del clip activo y operaciones asíncronas** ✅
+- **Error original (E-09, E-11), reproducido:** con el test nuevo sobre el código anterior fallaron 3 de 4 casos.
+  - (1) Si se editaba el título de otro clip durante una descarga, la edición se perdía (`'Clip 2'` en lugar de `'EDITED WHILE DOWNLOADING'`), porque el resultado aplicaba una copia vieja de `project.clips`.
+  - (2) Con dos descargas a la vez solo quedaba una (misma causa, y además `downloadingClipId` era un único valor).
+  - (3) Tras cambiar de proyecto, el título del clip no se podía arrastrar, porque `activeClipId` seguía apuntando a un clip del proyecto anterior.
+  - El caso (4), cambiar de proyecto durante una descarga sin tocar el otro proyecto, ya funcionaba; queda como test de protección.
+- **Solución:**
+  - `updateClipInProject(projectId, clipId, updates)` con `setProjects(prev => …)`. La descarga y la subida guardan el proyecto en el que empezaron y aplican el resultado sobre el estado más reciente.
+  - Los estados de carga son por clip (`Record`), y los errores se actualizan de forma funcional.
+  - Al cambiar de proyecto, `activeClipId` pasa a su primer clip.
+  - `ClipCard` recibe `isUploading`/`isDownloading`.
+- **Archivos:** `App.tsx`, `tests/e2e/clip-state.test.mjs` (nuevo).
+- **Pruebas:** `npm run test:e2e` da 14/14, con `/api/download` simulado con retardo. `tsc --strict` da 0 errores.
 
 ---
 
