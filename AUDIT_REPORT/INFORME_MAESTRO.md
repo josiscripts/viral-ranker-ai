@@ -162,7 +162,7 @@ Fichas completas (archivos, solución, dependencias, criterios de aceptación y 
 
 ## 11. Actualización 2026-11-01: Prioridad 0 ejecutada
 
-Con tu autorización se implementó P0: 7 de 8 tareas están cerradas y P0-06 queda parcial porque falta el rate limiting. Los cambios no están commiteados. Hay tres hallazgos nuevos:
+Con tu autorización se implementó P0 completo (8 de 8 tareas). El rate limiting se añadió después, cuando aprobaste `express-rate-limit`. Hay tres hallazgos nuevos:
 - E-41: las exportaciones con título ya fallaban antes por la fuente de `drawtext`.
 - E-42: falta `@types/react`.
 - E-43: yt-dlp necesita `deno` para YouTube.

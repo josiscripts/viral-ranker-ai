@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 import healthRoutes from './routes/health';
 import uploadRoutes from './routes/upload';
 import filesRoutes from './routes/files';
@@ -34,6 +35,24 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
+
+// Rate limits per client IP. The expensive endpoints (ffmpeg/yt-dlp work) get
+// their own tight budget; everything else, including export status polling
+// (every 500 ms), shares a generous one.
+const createLimiter = (windowMs: number, limit: number) =>
+  rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please wait a few minutes and try again' }
+  });
+
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+app.use('/api', createLimiter(60 * 1000, 300));
+app.post('/api/upload', createLimiter(FIFTEEN_MINUTES_MS, 30));
+app.post('/api/download', createLimiter(FIFTEEN_MINUTES_MS, 20));
+app.post('/api/export', createLimiter(FIFTEEN_MINUTES_MS, 10));
 
 app.use(express.json());
 
