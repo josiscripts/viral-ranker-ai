@@ -168,3 +168,20 @@ Con tu autorización se implementó P0 completo (8 de 8 tareas). El rate limitin
 - E-43: yt-dlp necesita `deno` para YouTube.
 
 Estado y verificación por tarea: `12_PLAN_DE_DESARROLLO.md`, "Estado de ejecución de P0". Archivos cambiados: `PLAN.md`, "Auditoría — Prioridad 0".
+
+## 12. Actualización 2026-11-01: Prioridad 1 ejecutada
+
+Las 10 tareas de P1 están implementadas y verificadas con tests automáticos (14 unitarios, 20 de servidor y 27 e2e), en la rama `codex/p1-estabilizacion` y sin push a `main`. Cada error se reprodujo con un test antes de corregirlo.
+
+Cambios principales en el export:
+- **Formato:** sale a 1080×1920, 30 fps, AAC 48 kHz estéreo, con el fondo y la altura de vídeo del proyecto y progreso real.
+- **Posición de los títulos:** coincide con la preview (diferencia medida ≤ 0,1 %).
+- **Diseño:** el vídeo lleva el diseño de la preview (estilos, palabras resaltadas, lista de rangos), con capas renderizadas en el navegador (opción b de P1-04).
+- **Fuente:** Inter (OFL) va incluida en el servidor.
+
+Detalle por tarea: `12_PLAN_DE_DESARROLLO.md`, "Estado de ejecución de P1", y `PLAN.md`, "Auditoría — Prioridad 1".
+
+Sigue pendiente:
+- decidir sobre `yt-dlp-ejs`;
+- verificar descargas reales de TikTok e Instagram;
+- E-37 (nombre del archivo exportado).

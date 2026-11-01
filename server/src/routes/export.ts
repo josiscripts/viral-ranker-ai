@@ -7,6 +7,7 @@ import {
   ExportRequest
 } from '../services/exportService';
 import { resolveAssetPath } from '../services/videoService';
+import { resolveOverlayPath } from '../services/overlayService';
 
 const router = Router();
 
@@ -16,13 +17,18 @@ const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // Control characters are rejected; a line break is allowed because the main title can span lines
 const FORBIDDEN_TITLE_CHARS = /[\u0000-\u0009\u000B-\u001F\u007F]/;
 
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+const MIN_VIDEO_HEIGHT = 10;
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
+// Title centers are fractions of the canvas: { fx, fy } in [0, 1]
+const isFraction = (value: unknown): value is number => isFiniteNumber(value) && value >= 0 && value <= 1;
 const isValidPosition = (value: unknown): boolean => {
   if (!value || typeof value !== 'object') return false;
-  const position = value as { x?: unknown; y?: unknown };
-  return isFiniteNumber(position.x) && isFiniteNumber(position.y);
+  const position = value as { fx?: unknown; fy?: unknown };
+  return isFraction(position.fx) && isFraction(position.fy);
 };
 
 const isValidTitle = (value: unknown): value is string =>
@@ -46,7 +52,7 @@ router.post('/export', async (req: Request, res: Response) => {
       clipsFields: req.body?.clips?.[0] ? Object.keys(req.body.clips[0]) : 'none'
     });
 
-    const { projectId, title, titlePosition, titleStroke, clips } = req.body as ExportRequest;
+    const { projectId, title, titlePosition, titleStroke, background, videoHeight, clips } = req.body as ExportRequest;
 
     // Validate input
     console.log('DEBUG: Validation checks - projectId:', !!projectId, 'title:', !!title, 'titlePosition:', !!titlePosition, 'clips:', clips?.length);
@@ -67,7 +73,7 @@ router.post('/export', async (req: Request, res: Response) => {
 
     if (typeof projectId !== 'string' || !isValidTitle(title) || !isValidPosition(titlePosition)) {
       return res.status(400).json({
-        error: `Invalid project data: title must be text of at most ${MAX_TITLE_LENGTH} characters and titlePosition must have numeric x/y`
+        error: `Invalid project data: title must be text of at most ${MAX_TITLE_LENGTH} characters and titlePosition must have fx/fy between 0 and 1`
       });
     }
 
@@ -75,6 +81,14 @@ router.post('/export', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `titleStroke must be an integer between 0 and ${MAX_TITLE_STROKE}`
       });
+    }
+
+    if (background !== undefined && (typeof background !== 'string' || !HEX_COLOR.test(background))) {
+      return res.status(400).json({ error: 'background must be a hex color like #000000' });
+    }
+
+    if (videoHeight !== undefined && (!isFiniteNumber(videoHeight) || videoHeight < MIN_VIDEO_HEIGHT || videoHeight > 100)) {
+      return res.status(400).json({ error: `videoHeight must be a number between ${MIN_VIDEO_HEIGHT} and 100` });
     }
 
     // Validate clips
@@ -101,7 +115,12 @@ router.post('/export', async (req: Request, res: Response) => {
       }
       if (clip.clipTitlePosition !== undefined && !isValidPosition(clip.clipTitlePosition)) {
         return res.status(400).json({
-          error: `Clip "${clip.title}": clipTitlePosition must have numeric x/y`
+          error: `Clip "${clip.title}": clipTitlePosition must have fx/fy between 0 and 1`
+        });
+      }
+      if (clip.overlayId !== undefined && !resolveOverlayPath(clip.overlayId)) {
+        return res.status(400).json({
+          error: `Clip "${clip.title}": overlayId does not match an uploaded overlay`
         });
       }
       if (!resolveAssetPath(clip.assetId)) {
@@ -158,6 +177,7 @@ router.get('/export/:jobId', (req: Request, res: Response) => {
       status: job.status,
       progress: job.progress,
       currentStep: job.currentStep,
+      step: job.step,
       error: job.error,
       downloadUrl: job.downloadUrl
     });

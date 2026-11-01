@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { runProcess } from './processRunner';
+import { UPLOAD_DIR, UPLOAD_TMP_DIR } from '../config';
 
-const UPLOAD_DIR = path.join(process.cwd(), 'storage', 'uploads');
-export const UPLOAD_TMP_DIR = path.join(process.cwd(), 'storage', 'tmp');
+export { UPLOAD_TMP_DIR };
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
 const MAX_BASENAME_LENGTH = 60;
 

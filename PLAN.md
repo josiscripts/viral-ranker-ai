@@ -239,7 +239,8 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 ---
 
 ## Fase 6: Exportación real a .mp4
-**Estado:** ✅ Completa
+**Estado:** ✅ Completada (reabierta y cerrada el 2026-11-01, tras P1-03, P1-02 y P1-04)
+**Motivo de la reapertura:** la auditoría (E-03, E-04, E-06, E-41) mostró que el export no sale a 1080×1920, que la posición de los títulos no coincide con la preview y que las exportaciones con título fallaban sin fuente. Se cierra cuando estén completas P1-03, P1-02 y P1-04 de la sección "Auditoría — Prioridad 1".
 **Depende de:** Fase 5 completa. ✅
 **Verificación:** ✅ Código compilado sin errores TypeScript; implementación lista para testing
 
@@ -318,6 +319,287 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 - `/translations.ts` — textos del Error Boundary (ES/EN)
 - `/ProfileView.tsx` — placeholders genéricos
 - `/vite.config.ts` — sin `host: '0.0.0.0'`, `strictPort: true`
+
+---
+
+## Auditoría — Prioridad 1 (funcionalidades principales)
+**Estado:** ✅ Completada (2026-11-01). Pendientes anotados: decisión sobre `yt-dlp-ejs`, descargas reales de TikTok/Instagram sin verificar, E-37 (nombre del archivo descargado).
+**Origen:** `AUDIT_REPORT/12_PLAN_DE_DESARROLLO.md`, sección "PRIORIDAD 1". Aprobado por el usuario el 2026-11-01, con estas autorizaciones: `@types/react` y `@types/react-dom`, tests con `node:test` + `playwright` (ya instalado), una fuente libre en el repo, runtime JS para yt-dlp y descargas reales de prueba.
+**Rama de trabajo:** `codex/p1-estabilizacion`. Commits pequeños, sin push a `main` sin autorización.
+**Orden:** se corrigió el roadmap para respetar las dependencias: P1-03 va antes que P1-02.
+
+| Paso | Tarea | Estado |
+|---|---|---|
+| B | Tipado del frontend (`@types/react`) | ✅ |
+| 1 | P1-01 Mostrar errores de exportación | ✅ |
+| 2 | P1-07 Cliente API, proxy de Vite y build del servidor | ✅ |
+| 3 | P1-05 Entrada de URL robusta | ✅ |
+| 4 | P1-06 Descargas de mejor calidad | ✅ |
+| 5 | P1-08 Clip activo y operaciones asíncronas | ✅ |
+| 6 | P1-09 Rangos coherentes y reordenación | ✅ |
+| 7 | P1-10 Preview fiel al trim | ✅ |
+| 8 | P1-03 Export normalizado 1080×1920 | ✅ |
+| 9 | P1-02 Coordenadas normalizadas | ✅ |
+| 10 | P1-04 Fidelidad visual del export | ✅ |
+
+### Registro de cambios
+(Cada tarea anota aquí el error original, la solución, los archivos y las pruebas)
+
+**B — Tipado del frontend** ✅
+- **Error original:** sin `@types/react`, React no tenía tipos y `tsc` daba 0 errores aunque hubiera fallos de props o hooks (E-42). Comprobado con un archivo de prueba: un `setN("x")` sobre `useState(0)` no daba error.
+- **Solución:** se instalaron `@types/react@19.3.0` y `@types/react-dom@19.3.0` (devDependencies). Con ellos, el modo actual da 0 errores y `--strict` daba 2 errores reales, que se corrigieron junto con los `any` sin justificar:
+  - `ClipCard`: `onUpdate`/`onRemove` tipados;
+  - `catch (err: any)` → `err instanceof Error`;
+  - `(c: any)` quitado;
+  - `lastError` del polling;
+  - `p.id as any` en `ProfileView`.
+  Se quitó de `ErrorBoundary.tsx` el `declare props`, que ya no hace falta.
+- **Archivos:** `package.json`, `package-lock.json`, `App.tsx`, `ProfileView.tsx`, `ErrorBoundary.tsx`.
+- **Pruebas:** `tsc --noEmit` (normal y `--strict`) da 0 errores; `tsc` del servidor da 0 errores; `vite build` OK. `strict` no se activó en `tsconfig.json` (eso es P3-02).
+
+**Base de tests (sin dependencias nuevas)** ✅
+- **Problema:** no había tests automatizados; todo P0 se había verificado a mano.
+- **Solución:**
+  - `server/tests/`: `node:test` + `ts-node`, contra un servidor real en un puerto aleatorio con `STORAGE_DIR` temporal. Los vídeos de prueba se generan con ffmpeg (`lavfi`), así que no hay binarios en el repo. `api.test.ts` cubre las regresiones de P0: 403 sin cabecera, upload no-vídeo y nombre hostil, URLs falsas, payloads de export maliciosos, traversal en la ruta de descarga y un export real con títulos hostiles.
+  - `tests/e2e/`: `node:test` + `playwright` (ya instalado), con Chromium en un perfil limpio (no toca los datos del navegador del usuario) y un backend propio con almacenamiento temporal. Si ya hay un Vite de este repo en `:3000`, lo reutiliza y no lo detiene.
+  - Para aislar el almacenamiento, `server/src/config.ts` centraliza las rutas (`STORAGE_DIR`, por defecto `server/storage`). Antes unas usaban `process.cwd()` y otras `__dirname` (adelanta P3-07). `index.ts` carga `.env` antes que el resto de módulos (`import 'dotenv/config'`).
+- **Archivos:** `server/src/config.ts` (nuevo), `server/src/index.ts`, `server/src/services/{downloadService,videoService,exportService}.ts`, `server/tests/*` (nuevo), `server/package.json` (`npm test`), `tests/e2e/helpers.mjs` (nuevo), `package.json` (`npm run test:e2e`).
+- **Pruebas:** `npm test` en `server/` da 8/8 en unos 14 s. `server/storage` queda intacto (42 uploads antes y después) y no quedan directorios temporales.
+
+**P1-01 — Mostrar los errores de exportación** ✅
+- **Error original (E-02), reproducido:** con el test e2e nuevo, ninguno de los 4 casos de fallo mostraba nada (clip sin vídeo, trim inválido, rechazo del servidor, servidor caído). `exportError` se guardaba pero no se pintaba, y el overlay decía "Encoding..." sin el paso actual. Además, el servidor nunca pasaba el job a `processing`.
+- **Solución:**
+  - Antes de enviar se valida en el cliente: clips sin vídeo y trims inválidos, con número de clip.
+  - Un banner `role="alert"` (ES/EN, modo claro y oscuro) muestra el motivo, el mensaje del servidor si lo hay, "Reintentar" y "Cerrar".
+  - Los errores se distinguen por tipo: validación, servidor, red y tiempo agotado.
+  - El servidor devuelve `step` (clave + clip/total) y marca `processing`, y el overlay muestra el paso traducido y el porcentaje.
+  - Se rehízo el polling: un error del job ya no se envuelve como "status check failed".
+- **Archivos:** `App.tsx`, `types.ts` (`ExportStep`, `ExportErrorInfo`, `ExportValidationIssue`), `translations.ts`, `server/src/services/exportService.ts`, `server/src/routes/export.ts`, `tests/e2e/export-errors.test.mjs` (nuevo).
+- **Pruebas:** `npm run test:e2e` da 5/5:
+  - clip sin vídeo y trim inválido (este en la UI en español): mensaje visible y 0 peticiones;
+  - rechazo del servidor: muestra el mensaje del servidor;
+  - servidor caído: mensaje visible, y "Reintentar" exporta y descarga;
+  - export correcto: muestra "Processing clip N of 2" y descarga.
+  También hay capturas del banner en tema claro y oscuro. `npm test` del servidor da 8/8 y `tsc` (frontend `--strict` y servidor) da 0 errores.
+
+**P1-07 — Configuración por entorno y build del servidor** ✅
+- **Error original (E-08, E-14, E-15):**
+  - 8 URLs `http://localhost:3001` fijas en `App.tsx`, con el fetch inline en el componente;
+  - los proyectos guardaban la URL absoluta del backend;
+  - `server/dist` era un build viejo de julio, sin la ruta de export ni las correcciones de P0, y `npm start` lo servía sin recompilar;
+  - los errores de upload/descarga mostraban el JSON crudo (`HTTP 400: {"error":...}`), porque el `catch` interno reemplazaba el mensaje.
+- **Solución:**
+  - Nuevo `services/apiClient.ts`, la única capa hacia el backend. Usa `/api` del mismo origen y `VITE_API_URL` opcional, añade la cabecera de la app en los POST y lanza `ApiNetworkError`/`ApiResponseError` con el mensaje del servidor.
+  - Proxy de Vite `/api` → `API_PROXY_TARGET` (por defecto `127.0.0.1:3001`).
+  - Los clips guardan `/api/files/<nombre>` y se resuelven con `resolveMediaUrl`. Los proyectos guardados con URL absoluta se migran al cargar, añadiendo `assetId`.
+  - `prestart: npm run build` en el servidor; se borró el `server/dist` viejo, que es generado e ignorado.
+  - `vite-env.d.ts` tipa `import.meta.env` y `.env.example` documenta las variables.
+- **Archivos:** `services/apiClient.ts` (nuevo), `App.tsx`, `types.ts` (`VideoAssetResponse`, `ExportRequest`, `ExportJobStatus`), `vite.config.ts`, `vite-env.d.ts` (nuevo), `.env.example` (nuevo), `server/package.json`, `tests/e2e/api-client.test.mjs` (nuevo).
+- **Pruebas:**
+  - `grep localhost:3001` en el código del frontend solo encuentra el comentario y la regex de migración; en el bundle de producción, 0 coincidencias.
+  - `npm start` en `server/` recompila `dist` y `POST /api/export` responde 400 de validación.
+  - `npm run test:e2e` da 7/7. Lo nuevo: un proyecto antiguo con URL absoluta se migra y su vídeo carga por el proxy (200/206); upload desde la UI y export van solo a `localhost:3000/api/...`, con 0 peticiones a `:3001`.
+  - `npm test` del servidor da 8/8 y `tsc --strict` da 0 errores.
+- **Pendiente detectado:** E-37 sigue abierto. El archivo exportado se descarga como `<jobId>.mp4` porque `Content-Disposition` del servidor manda sobre el atributo `download`. No forma parte de P1-07.
+
+**P1-05 — Entrada de URL robusta** ✅
+- **Error original (E-05), reproducido:** con el test nuevo sobre el código anterior, escribir el enlace tecla a tecla ya lanzaba `POST /api/download` a mitad de escritura (1 petición antes de terminar). Además, cada tecla sobrescribía `clip.url` (la URL servida del vídeo) y el campo mostraba la URL del backend en lugar del enlace original.
+- **Solución:**
+  - En `ClipCard`, el texto escrito queda en estado local (`urlDraft`). La descarga empieza solo con Enter, con el botón nuevo (icono `Download`, con `aria-label` traducido) o al pegar un enlace en el campo vacío o totalmente seleccionado.
+  - El enlace original se guarda en `Clip.sourceUrl` y es lo que muestra el campo; `clip.url` sigue siendo la URL del vídeo servido.
+- **Archivos:** `types.ts` (`sourceUrl`), `App.tsx` (`ClipCard`, `handleDownloadUrl`), `translations.ts` (`downloadFromLink`), `tests/e2e/url-input.test.mjs` (nuevo).
+- **Pruebas:** en `url-input.test.mjs`, `/api/download` está simulado, así que no se contacta con YouTube.
+  - Con el código anterior, 2 de 3 tests fallaron.
+  - Con la corrección:
+    - escribir no manda nada y Enter manda una sola petición, con el enlace exacto;
+    - pegar descarga una vez;
+    - el botón descarga.
+  - `npm run test:e2e` da 10/10 y `tsc --strict` da 0 errores. También hay capturas del campo en tema claro y oscuro.
+
+**P1-06 — Descargas asíncronas y de mejor calidad** ✅
+- **Error original:**
+  - El formato `best[ext=mp4]` solo acepta archivos progresivos (360p como máximo en YouTube). Con el yt-dlp actual, YouTube no los ofrece sin el solver de JS, así que **la descarga de YouTube fallaba** (400 con el mensaje truncado de un WARNING).
+  - Cualquier extractor de yt-dlp podía procesar la URL (S-08).
+  - El error mostrado eran los primeros 100 caracteres de stderr, es decir, avisos y no el error.
+  - Los archivos parciales quedaban en `uploads/`.
+  - Que la descarga fuera asíncrona ya se había resuelto en P0 (`runProcess`).
+- **Solución:**
+  - Formato `bv*[ext=mp4][vcodec^=avc1][height<=1920][width<=1920]+ba[ext=m4a]`, con alternativas sin H.264 y de archivo único, y `--merge-output-format mp4`. El tope de 1920 px por lado evita bajar 1440p/4K que el export (1080×1920) no usa y que superaría el límite de 300 MB.
+  - `--use-extractors` limitado al extractor de la plataforma detectada.
+  - El error se toma de las líneas `ERROR:`, y hay un mensaje específico si falta el solver de YouTube.
+  - Los archivos parciales (`.part`, `.fNNN`) se borran si la descarga falla.
+- **Archivos:** `server/src/services/downloadService.ts`, `server/tests/downloadService.test.ts` (nuevo), `server/README.md` (runtime JS de yt-dlp, tests, variables).
+- **Pruebas:**
+  - **Descargas reales a través del servidor de prueba (almacenamiento temporal):**
+    - YouTube "Me at the zoo" da 200: H.264 + AAC unidos (240p, la resolución máxima de ese vídeo).
+    - `/api/health` responde en 3–5 ms durante la descarga (criterio < 100 ms).
+    - Un vídeo inexistente da 400 con "This video is unavailable" y no deja archivos.
+  - **Criterio ≥ 720p:** en un vídeo HD público (Big Buck Bunny, Blender Foundation), yt-dlp con el mismo selector elige `299+140` (1920×1080, H.264, unos 268 MB). Se descargaron solo los primeros 5 s con `--download-sections`, y `ffprobe` da 1920×1080 H.264 + AAC. El vídeo completo (10 min) no se bajó.
+  - `npm test` da 12/12 (4 unitarios nuevos: hosts, look-alikes y extracción de errores).
+- **No verificado:** TikTok e Instagram (no se probó con enlaces reales).
+- **Pendiente de decisión:** `yt-dlp-ejs` (scripts del solver; `deno` ya está instalado). Sin él, yt-dlp avisa `n challenge solving failed` y algunos formatos o vídeos de YouTube pueden faltar. Es una dependencia nueva de Python, no autorizada explícitamente.
+
+**P1-08 — Estado del clip activo y operaciones asíncronas** ✅
+- **Error original (E-09, E-11), reproducido:** con el test nuevo sobre el código anterior fallaron 3 de 4 casos.
+  - (1) Si se editaba el título de otro clip durante una descarga, la edición se perdía (`'Clip 2'` en lugar de `'EDITED WHILE DOWNLOADING'`), porque el resultado aplicaba una copia vieja de `project.clips`.
+  - (2) Con dos descargas a la vez solo quedaba una (misma causa, y además `downloadingClipId` era un único valor).
+  - (3) Tras cambiar de proyecto, el título del clip no se podía arrastrar, porque `activeClipId` seguía apuntando a un clip del proyecto anterior.
+  - El caso (4), cambiar de proyecto durante una descarga sin tocar el otro proyecto, ya funcionaba; queda como test de protección.
+- **Solución:**
+  - `updateClipInProject(projectId, clipId, updates)` con `setProjects(prev => …)`. La descarga y la subida guardan el proyecto en el que empezaron y aplican el resultado sobre el estado más reciente.
+  - Los estados de carga son por clip (`Record`), y los errores se actualizan de forma funcional.
+  - Al cambiar de proyecto, `activeClipId` pasa a su primer clip.
+  - `ClipCard` recibe `isUploading`/`isDownloading`.
+- **Archivos:** `App.tsx`, `tests/e2e/clip-state.test.mjs` (nuevo).
+- **Pruebas:** `npm run test:e2e` da 14/14, con `/api/download` simulado con retardo. `tsc --strict` da 0 errores.
+
+**P1-09 — Rangos coherentes y reordenación** ✅
+- **Error original (E-12), reproducido:** con el test nuevo sobre el código anterior, borrar el clip 2 de 3 y añadir otro dejaba los rangos `1, 3, 3`, porque el nuevo recibía `length + 1`. El servidor ordena el export por `rank`, así que con rangos repetidos el orden del vídeo no estaba definido. Además, no había forma de reordenar los clips.
+- **Solución:**
+  - `utils/clips.ts` (nuevo, funciones puras): `renumberClips` (el rango sigue el orden de la lista) y `moveClip`.
+  - Se renumera al añadir, al borrar, al mover y al cargar proyectos guardados (corrige los duplicados antiguos).
+  - Botones ↑/↓ en cada `ClipCard`, con los iconos `ArrowUp`/`ArrowDown` ya importados, `aria-label` traducido y desactivados en los extremos.
+- **Archivos:** `utils/clips.ts` (nuevo), `App.tsx`, `translations.ts`, `package.json` (`npm run test:unit`), `tests/unit/clips.test.ts` (nuevo), `tests/e2e/ranks.test.mjs` (nuevo).
+- **Pruebas:**
+  - Con el código anterior, 2 tests e2e fallaron (`1,3,3` y duplicados sin corregir).
+  - Con la corrección:
+    - `npm run test:unit` da 5/5;
+    - `ranks.test.mjs` da 3/3 (borrar+añadir, mover con botones y extremos desactivados, migración de duplicados);
+    - `tsc --strict` da 0 errores.
+  - También hay capturas de los botones en tema claro y oscuro.
+
+**P1-10 — Preview fiel al trim** ✅
+- **Error original (E-10, E-13, E-28, E-29, E-30), reproducido:** con el test nuevo sobre el código anterior fallaron los 3 casos.
+  - La preview reproducía el vídeo entero en bucle: con un trim de 2–3 s, las muestras iban de 0,00 a 3,60.
+  - Los inputs guardaban un trim inválido (inicio 9 con fin 3).
+  - Al cambiar de fuente se mantenía `startTime` = 4 con un fin de 2 s.
+  - La barra de progreso solo cambiaba al re-renderizar.
+- **Solución:**
+  - `utils/clips.ts`: `clampTrim` limita a `[0, duración]` con inicio < fin (mínimo 0,1 s; el lado editado se detiene en el otro). `initialTrim` aplica 0–5 s al cargar una fuente, o 5 s si la duración es desconocida.
+  - En `ClipCard`, los inputs de trim son borradores que se validan al salir del campo o con Enter.
+  - La preview ya no usa `loop`: `onTimeUpdate`/`onEnded`/`onLoadedMetadata` la mantienen dentro del rango.
+  - La barra de progreso usa el estado `previewProgress` (posición dentro del trim).
+  - En los tests e2e, Chromium arranca con autoplay permitido para que la preview se reproduzca como tras un clic.
+- **Archivos:** `utils/clips.ts`, `App.tsx`, `tests/unit/clips.test.ts`, `tests/e2e/trim-preview.test.mjs` (nuevo), `tests/e2e/helpers.mjs`.
+- **Pruebas:**
+  - `npm run test:unit` da 10/10 y `npm run test:e2e` da 20/20.
+  - El e2e de la preview toma 30 muestras de `currentTime` en 3 s: todas dentro de [1,9; 3,3], y la barra pasa por más de 3 anchos distintos.
+  - `npm test` del servidor da 12/12, `tsc --strict` da 0 errores y `vite build` OK.
+
+**P1-03 — Export normalizado 1080×1920** ✅
+- **Error original (E-03, E-06, E-18), reproducido:** con el test nuevo sobre el código anterior fallaron los 3 casos.
+  - Tres clips distintos (640×360 a 48 kHz, 720×1280 a 25 fps y 44,1 kHz, 480×480 sin audio) exportaban a **640 px de ancho**: no había `scale`/`pad` ni `fps`.
+  - El color de fondo y la altura del vídeo del proyecto no llegaban al servidor.
+  - Un `background` como `red;drawtext` se aceptaba (200).
+  - Además, el concat con `-c copy` unía segmentos con resoluciones y audio distintos, y el progreso solo cambiaba entre pasos (0/60/70/90 %).
+- **Solución:**
+  - `renderClipSegment` hace **una sola pasada de ffmpeg por clip**:
+    - recorte con `-ss/-t`;
+    - escala a cubrir el área de vídeo y recorte (igual que `object-cover` de la preview), con la altura `videoHeight` % del lienzo;
+    - `pad` a 1080×1920 centrado con el color `background`;
+    - `fps=30` y `yuv420p`, con los títulos por `drawtext` (texto literal, como en P0-05);
+    - audio AAC 48 kHz estéreo con `apad` hasta la duración del clip, o una pista silenciosa (`anullsrc`) si la fuente no tiene audio.
+  - Como todos los segmentos son idénticos, el concat copia sin recodificar y añade `+faststart`.
+  - **Progreso real:** `-progress pipe:1` se lee mientras corre ffmpeg (`runProcess` acepta `onStdout`). Los clips ocupan el 0–90 %, ponderados por la duración recortada; luego unir (92 %) y limpiar (98 %).
+  - Cada clip tiene un tiempo máximo de 5 min.
+  - El cliente envía `background` y `videoHeight`. Si un proyecto antiguo tiene valores inválidos, se usa `#000000` y la altura se limita a 10–100.
+  - El servidor valida `background` (`#RRGGBB`) y `videoHeight` (10–100), y si faltan usa negro y el 100 %.
+  - Se eliminaron `trimClip` y `addTextOverlay`, que quedaron sin uso.
+  - Las posiciones de los títulos mantienen el mapeo en px anterior; las corrige P1-02.
+- **Archivos:** `server/src/services/{ffmpegService,exportService,processRunner}.ts`, `server/src/routes/export.ts`, `types.ts` (`ExportRequest`), `App.tsx` (`handleExport`), `server/tests/{export,ffmpegService}.test.ts` (nuevos), `server/tests/helpers.ts`, `tests/e2e/export-layout.test.mjs` (nuevo).
+- **Pruebas:**
+  - `export.test.ts` usa `ffprobe` sobre el MP4 descargado:
+    - 1080×1920, 30 fps, duración 3,7 s ±0,1 (suma de los trims), audio AAC de 48 kHz y 2 canales, y la pista de audio dura lo mismo que la de vídeo (±0,1 s);
+    - los clips con audio conservan sonido y el clip sin audio es silencio;
+    - el fondo aparece arriba y abajo en los 3 clips y no dentro del área de vídeo;
+    - el progreso toma al menos 4 valores distintos durante el job;
+    - los valores inválidos devuelven 400.
+  - El test de títulos hostiles de P0 sigue pasando con el pipeline nuevo.
+  - Resultados:
+    - `npm test` del servidor: 16/16;
+    - `npm run test:unit`: 10/10;
+    - `npm run test:e2e`: 22/22 (incluye `export-layout`: el payload lleva el fondo y la altura, y un proyecto antiguo exporta igual);
+    - `tsc --strict` del frontend y `tsc` del servidor: 0 errores;
+    - build del servidor y `vite build`: OK.
+  - `server/storage` queda intacto: 42 uploads y 4 exports antes y después.
+- **No verificado:** la mezcla con clips reales de TikTok e Instagram (el criterio original); se usaron fixtures con las mismas diferencias de formato.
+
+**Fuente incluida (Inter, OFL)** ✅
+- **Problema:** el export dependía de Arial/DejaVu del sistema o de `FONT_FILE` (E-41), y la preview usa Inter.
+- **Solución:** Inter 4.1 (`Inter-Bold`, `Inter-BoldItalic`, `Inter-Medium`) en `server/assets/fonts/`, con `OFL.txt` y un `README.md` de procedencia y hashes SHA-256. Viene del release oficial `rsms/inter` v4.1; el tamaño del zip coincide con el que publica GitHub y la licencia es SIL OFL 1.1.
+  - Orden de búsqueda: `FONT_FILE` (si está definida, para todas las variantes), luego Inter incluida, luego fuentes del sistema.
+  - Cada capa de texto puede pedir una variante (`bold`, `boldItalic`, `medium`).
+- **Archivos:** `server/assets/fonts/*` (nuevos), `server/src/services/ffmpegService.ts`, `server/tests/ffmpegService.test.ts`, `server/README.md`, `server/.env.example`.
+- **Pruebas:** test unitario de la resolución de la fuente (con y sin `FONT_FILE`). El export con títulos hostiles se renderiza con Inter. `npm test` del servidor: 17/17.
+
+**P1-02 — Coordenadas normalizadas** ✅
+- **Error original (E-04):** los títulos se guardaban como píxeles de desplazamiento desde el centro de la preview, y la preview cambia de tamaño con la ventana. Medido en el panel del navegador: el lienzo medía 160×306 px y el título por defecto (`y: -220`) quedaba **fuera del lienzo**. El servidor usaba otra referencia (540 px, con `+960` solo en el título principal), así que preview y export no coincidían.
+- **Solución:**
+  - Las posiciones son el **centro del texto en fracciones del lienzo**, `{fx, fy}` ∈ [0, 1] (`NormalizedPosition` en `types.ts`).
+  - La capa de títulos y la lista de rangos se dibujan en un "escenario" fijo de 432×768 (`utils/titleLayout.ts`, el tamaño de escritorio) escalado al lienzo con CSS. Así el texto conserva tamaño y lugar relativos con cualquier ventana.
+  - El lienzo es ahora exactamente 9:16 dentro del marco: antes medía 432×790, porque el `aspect-ratio` incluía el borde.
+  - El arrastre calcula la fracción y la limita para que el texto quede entero dentro del lienzo.
+  - **Migración:** los proyectos guardados con `{x, y}` se convierten al cargar (referencia 432×790, el lienzo de escritorio anterior); el título por defecto pasa a `fy` 0,2215, el mismo lugar que antes.
+  - **Export:** `x=w*fx-text_w/2`, `y=h*fy-text_h/2`, con `text_align=C` para títulos de varias líneas y tamaño 40 px (16 px del escenario × 2,5). El servidor valida `fx`/`fy` entre 0 y 1 y rechaza el formato antiguo.
+  - El arrastre del título del clip usa `updateClipInProject` (P1-08).
+- **Archivos:** `utils/titleLayout.ts` (nuevo), `types.ts`, `App.tsx` (migración, lienzo, escenario, arrastre, render), `server/src/routes/export.ts`, `server/src/services/{exportService,ffmpegService}.ts`, `tests/unit/titleLayout.test.ts` (nuevo), `tests/e2e/title-position.test.mjs` (nuevo), `tests/e2e/{helpers,clip-state}.test.mjs`, `server/tests/{api,export}.test.ts`.
+- **Pruebas:**
+  - `title-position.test.mjs`:
+    - un proyecto con píxeles antiguos se migra a `{0.5, 0.2215}` / `{0.75, 0.5}`;
+    - con lienzos de 612, 407 y 160 px, el centro y la altura relativos de los títulos son idénticos (0,350/0,150 y 0,700/0,850; altura 0,0417);
+    - **fotograma exportado frente a preview:** título principal 0,350/0,150 en ambos; título del clip 0,700/0,850 en la preview y 0,699/0,850 en el export (tolerancia ±2 %).
+  - Resultados:
+    - `npm run test:unit`: 14/14 (4 nuevos);
+    - `npm run test:e2e`: 25/25;
+    - `npm test` del servidor: 17/17 (posiciones inyectadas, formato antiguo y valores fuera de rango devuelven 400);
+    - `tsc --strict`: 0 errores;
+    - `vite build`: OK.
+  - En la app real (panel del navegador, 1440×900) el proyecto del usuario se migró y los títulos se ven dentro del lienzo, en el mismo lugar.
+- **Límites conocidos:**
+  - Los títulos de una línea muy larga se parten en la preview (ancho máximo del lienzo), pero `drawtext` no parte líneas. Con P1-04 el export usa la capa de la preview, así que esto solo afecta al modo sin capa.
+  - Estilos, colores y mayúsculas de los presets llegan al export con P1-04.
+
+**P1-04 — Fidelidad visual del export** ✅
+- **Requisito (del usuario, 2026-11-01):** el vídeo final reproduce fielmente los elementos visuales del diseño que aparecen en la preview, sin los controles del editor. Proyectos antiguos siguen funcionando.
+- **Error original, reproducido:** con el test nuevo sobre el código anterior, el fotograma exportado no tenía:
+  - la palabra resaltada en el color de acento;
+  - la caja azul del título del clip;
+  - la lista de rangos.
+  La cobertura medida fue 0 en los tres casos: el export solo dibujaba los dos títulos en blanco con `drawtext`, e ignoraba presets, palabras resaltadas, lista lateral y sombreado.
+- **Opción elegida: (b), capas renderizadas en el navegador.** La opción (a) (`drawtext`/`drawbox`) no puede reproducir varias palabras de colores en una línea, cajas con padding ni sombras difuminadas.
+  - `services/overlayRenderer.ts` (nuevo, sin librerías) copia el lienzo de la preview con sus estilos calculados en línea y sin el `<video>`. Lo envuelve en un SVG `<foreignObject>`, incrusta Inter (las caras latinas de Google Fonts, como data URL) y lo dibuja en un `<canvas>` de 1080×1920. El resultado es un PNG transparente con títulos, estilos, palabras resaltadas, lista de rangos y sombreado/degradado del vídeo.
+  - Al exportar, la preview pasa por cada clip (espera 600 ms a que termine la animación de la lista) y sube su capa a `POST /api/overlays`. Después vuelve al clip que estaba activo.
+  - Nuevo paso "Preparando el diseño N de M" en ES/EN, y error `render` traducido si el navegador no puede generar la capa.
+  - **Servidor:**
+    - `POST /api/overlays`: multer en memoria, máximo 8 MB y un archivo, cabecera de la app obligatoria y límite de 100 cada 15 min. Valida la firma PNG, 1080×1920 y RGBA, y guarda con nombre UUID en `storage/overlays`.
+    - `/api/export` acepta `overlayId` por clip y solo resuelve nombres UUID existentes.
+    - ffmpeg lo lee con `-f png_pipe` (nunca como patrón de `image2`) y lo superpone con `overlay` sobre el vídeo ya escalado y con el fondo.
+    - Las capas son de un solo uso: se borran al terminar o fallar el job, y las que nadie usó, al cabo de 1 h.
+  - **Compatibilidad:** sin `overlayId`, el servidor sigue dibujando los títulos con `drawtext` (P1-02), así que otros clientes y llamadas antiguas a la API siguen funcionando.
+- **Archivos:** `services/overlayRenderer.ts` (nuevo), `services/apiClient.ts` (`uploadOverlay`), `App.tsx` (`renderClipOverlays`, pasos y error), `types.ts`, `translations.ts`, `server/src/services/overlayService.ts` (nuevo), `server/src/routes/overlays.ts` (nuevo), `server/src/{index,config}.ts`, `server/src/routes/export.ts`, `server/src/services/{exportService,ffmpegService}.ts`, `server/tests/overlays.test.ts` (nuevo), `tests/e2e/export-fidelity.test.mjs` (nuevo), `tests/e2e/title-position.test.mjs`.
+- **Pruebas:**
+  - `export-fidelity.test.mjs`, con las cajas medidas en la preview y comparadas en el fotograma exportado:
+    - la palabra resaltada sale en rojo de acento (21 % de la caja);
+    - la caja azul del título del clip (72 %) y la del número de la lista (50 %);
+    - con 2 clips, cada segmento lleva su propia capa (caja azul en el clip 1, roja "Alert" en el clip 2) y la preview vuelve al clip que estaba activo.
+  - `title-position.test.mjs` ahora mide las cajas azules de los títulos estilados: preview 0,350/0,080 y 0,700/0,850; export 0,349/0,079 y 0,700/0,850.
+  - `overlays.test.ts` (servidor), 3 tests:
+    - acepta un PNG válido;
+    - rechaza no-PNG, tamaño incorrecto, sin alfa y sin cabecera (403), y no guarda los rechazados;
+    - rechaza `overlayId` con traversal o desconocidos;
+    - el píxel de la capa aparece sobre el vídeo y la capa se borra tras el export.
+  - Resultados:
+    - `npm run test:unit`: 14/14;
+    - `npm test` del servidor: 20/20;
+    - `npm run test:e2e`: 27/27;
+    - `tsc --strict`: 0 errores;
+    - builds del servidor y `vite build`: OK.
+  - Revisión visual del fotograma exportado: título QUICK con sombra, lista "1." con su caja, título del clip en caja azul y sombreado alrededor del vídeo, iguales a la preview.
+- **Límites conocidos:**
+  - La capa es fija durante cada clip: las animaciones de la preview (escala de la lista al cambiar de clip) no se animan en el vídeo.
+  - Con el trazo por defecto (2 px) sobre texto de 16 px, el contorno negro tapa casi todo el relleno; es igual en la preview y el export, y es una cuestión de diseño, no un fallo.
+  - `backdrop-blur` (fondo difuminado de algunos estilos de la lista) depende del soporte de Chrome dentro de `foreignObject`; no se verificó por separado.
+  - Si Google Fonts no responde, la capa se dibuja con la fuente de reserva del navegador y queda un aviso en la consola.
 
 ---
 

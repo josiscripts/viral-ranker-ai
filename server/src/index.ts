@@ -1,14 +1,15 @@
+// Load .env before any other module reads process.env at import time
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import healthRoutes from './routes/health';
 import uploadRoutes from './routes/upload';
 import filesRoutes from './routes/files';
 import downloadRoutes from './routes/download';
 import exportRoutes from './routes/export';
-
-dotenv.config();
+import overlayRoutes from './routes/overlays';
+import { UPLOAD_DIR } from './config';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -53,6 +54,8 @@ app.use('/api', createLimiter(60 * 1000, 300));
 app.post('/api/upload', createLimiter(FIFTEEN_MINUTES_MS, 30));
 app.post('/api/download', createLimiter(FIFTEEN_MINUTES_MS, 20));
 app.post('/api/export', createLimiter(FIFTEEN_MINUTES_MS, 10));
+// One overlay per clip (up to 10) for each export
+app.post('/api/overlays', createLimiter(FIFTEEN_MINUTES_MS, 100));
 
 app.use(express.json());
 
@@ -61,9 +64,10 @@ app.use('/api', uploadRoutes);
 app.use('/api', filesRoutes);
 app.use('/api', downloadRoutes);
 app.use('/api', exportRoutes);
+app.use('/api', overlayRoutes);
 
 app.listen(PORT, HOST, () => {
   console.log(`✅ Server running on http://${HOST}:${PORT}`);
   console.log(`📡 CORS enabled for ${FRONTEND_URL}`);
-  console.log(`📁 Video uploads: /server/storage/uploads`);
+  console.log(`📁 Video uploads: ${UPLOAD_DIR}`);
 });

@@ -51,13 +51,28 @@ import {
   LayoutDashboard, 
   Zap, 
   Layers, 
+  X,
   Type as TypeIconComponent
 } from 'lucide-react';
-import { Clip, Project, UserProfile } from './types';
+import { Clip, Project, UserProfile, ExportErrorInfo, ExportStep, ExportValidationIssue, ExportRequest } from './types';
 import { generateRankingScript } from './services/geminiService';
+import {
+  ApiNetworkError,
+  ApiResponseError,
+  apiUrl,
+  resolveMediaUrl,
+  downloadVideoFromUrl,
+  uploadVideoFile,
+  createExportJob,
+  getExportJobStatus,
+  uploadOverlay
+} from './services/apiClient';
+import { renderOverlayPng } from './services/overlayRenderer';
 import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
+import { renumberClips, moveClip, clampTrim, initialTrim } from './utils/clips';
+import { PREVIEW_STAGE, DEFAULT_TITLE_POSITION, DEFAULT_CLIP_TITLE_POSITION, clampPosition, migratePosition } from './utils/titleLayout';
 
 const getClipLayoutConfig = (clipCount: number) => {
   if (clipCount <= 4) {
@@ -139,7 +154,7 @@ const createNewProject = (id: string): Project => ({
   captionStyle: 'BLUE_BOX',
   enableTitleDrag: false,
   titleStroke: 2,
-  titlePosition: { x: 0, y: -220 }, 
+  titlePosition: DEFAULT_TITLE_POSITION,
   highlightedIndices: []
 });
 
@@ -153,13 +168,10 @@ const INITIAL_PROJECTS: Project[] = [
     captionStyle: 'RANDOM_COLOR',
     enableTitleDrag: false,
     titleStroke: 2,
-    titlePosition: { x: 0, y: -220 }, 
+    titlePosition: DEFAULT_TITLE_POSITION,
     highlightedIndices: [1]
   }
 ];
-
-// Header required by the backend on every POST (forces a CORS preflight)
-const APP_REQUEST_HEADERS = { 'X-Requested-With': 'viral-ranker' };
 
 // Clips created before assetId existed only store the served URL (/api/files/<name>)
 const getClipAssetId = (clip: Clip): string | undefined => {
@@ -172,6 +184,49 @@ const getClipAssetId = (clip: Clip): string | undefined => {
     return undefined;
   }
 };
+
+// Projects saved before P1-07 stored absolute backend URLs
+// (http://localhost:3001/api/files/<name>). Keep only the relative path and the
+// asset id, so the project works whatever address the backend has.
+const LEGACY_MEDIA_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1):3001(\/api\/files\/[^?#]+)$/;
+
+const migrateLegacyClip = (clip: Clip): Clip => {
+  // Title positions used to be pixel offsets that depended on the window size (E-04)
+  const positioned = clip.clipTitlePosition === undefined
+    ? clip
+    : { ...clip, clipTitlePosition: migratePosition(clip.clipTitlePosition, DEFAULT_CLIP_TITLE_POSITION) };
+  const match = typeof clip.url === 'string' ? clip.url.match(LEGACY_MEDIA_URL) : null;
+  if (!match) return positioned;
+  const migrated = { ...positioned, url: match[1] };
+  return { ...migrated, assetId: clip.assetId || getClipAssetId(migrated) };
+};
+
+// Also renumbers ranks: older versions could save duplicated ranks (E-12)
+const migrateLegacyProjects = (projects: Project[]): Project[] =>
+  projects.map(project => ({
+    ...project,
+    titlePosition: migratePosition(project.titlePosition, DEFAULT_TITLE_POSITION),
+    ...(Array.isArray(project.clips) ? { clips: renumberClips(project.clips.map(migrateLegacyClip)) } : {})
+  }));
+
+// Clips the server would reject, checked before anything is sent
+const getExportIssues = (clips: Clip[]): ExportValidationIssue[] =>
+  clips.flatMap((clip, index): ExportValidationIssue[] => {
+    if (!getClipAssetId(clip)) return [{ clipNumber: index + 1, reason: 'missingVideo' }];
+    const validTrim = Number.isFinite(clip.startTime) && Number.isFinite(clip.endTime)
+      && clip.startTime >= 0 && clip.startTime < clip.endTime;
+    return validTrim ? [] : [{ clipNumber: index + 1, reason: 'invalidTrim' }];
+  });
+
+// Carries the kind of failure from the export flow to the error banner
+class ExportFailure extends Error {
+  info: ExportErrorInfo;
+
+  constructor(info: ExportErrorInfo) {
+    super(info.message || info.kind);
+    this.info = info;
+  }
+}
 
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Creator',
@@ -198,7 +253,7 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(saved);
         // An empty list would leave the editor without an active project
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return migrateLegacyProjects(parsed);
       } catch (e) {
         console.error('Failed to parse projects from localStorage', e);
       }
@@ -274,17 +329,21 @@ const App: React.FC = () => {
   });
   const [activeTab, setActiveTab] = useState('home'); 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [uploadingClipId, setUploadingClipId] = useState<string | null>(null);
+  // Per clip, so several uploads/downloads can run at the same time
+  const [uploadingClipIds, setUploadingClipIds] = useState<Record<string, boolean>>({});
   const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
-  const [downloadingClipId, setDownloadingClipId] = useState<string | null>(null);
+  const [downloadingClipIds, setDownloadingClipIds] = useState<Record<string, boolean>>({});
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportJobId, setExportJobId] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<ExportErrorInfo | null>(null);
+  const [exportStep, setExportStep] = useState<ExportStep | null>(null);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [isPlaying, setIsPlaying] = useState(true);
+  // Playback position inside the active clip's trim, 0..1
+  const [previewProgress, setPreviewProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [showCaptions, setShowCaptions] = useState(true);
@@ -303,6 +362,18 @@ const App: React.FC = () => {
   const titleElementRef = useRef<HTMLDivElement>(null);
   const clipTitleElementRef = useRef<HTMLDivElement>(null);
   const [isDraggingClipTitle, setIsDraggingClipTitle] = useState(false);
+  // Canvas width / stage width: the overlay is laid out on PREVIEW_STAGE and scaled to the canvas
+  const [previewScale, setPreviewScale] = useState(1);
+  const previewObserverRef = useRef<ResizeObserver | null>(null);
+  const setPreviewContainer = useCallback((node: HTMLDivElement | null) => {
+    previewContainerRef.current = node;
+    previewObserverRef.current?.disconnect();
+    previewObserverRef.current = null;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => setPreviewScale(entry.contentRect.width / PREVIEW_STAGE.width));
+    observer.observe(node);
+    previewObserverRef.current = observer;
+  }, []);
   const [clipTitleDragStart, setClipTitleDragStart] = useState<{ x: number, y: number } | null>(null);
 
   const t = translations[lang];
@@ -323,10 +394,9 @@ const App: React.FC = () => {
   const activeClipIndex = useMemo(() => project.clips.findIndex(c => c.id === activeClipId), [project.clips, activeClipId]);
   const activeClip = useMemo(() => project.clips[activeClipIndex] || project.clips[0], [project.clips, activeClipIndex]);
 
+  // The active clip belongs to the open project: select its first clip on every switch
   useEffect(() => {
-    if (project.clips.length > 0 && !activeClipId) {
-      setActiveClipId(project.clips[0].id);
-    }
+    setActiveClipId(project.clips[0]?.id ?? null);
   }, [project.id]);
 
   useEffect(() => {
@@ -349,6 +419,24 @@ const App: React.FC = () => {
     }
   }, [activeClip?.startTime, activeClip?.endTime, activeClip?.url]);
 
+  // The preview loops over [startTime, endTime], like the exported clip
+  const handlePreviewTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (!activeClip) return;
+    const video = e.currentTarget;
+    const length = activeClip.endTime - activeClip.startTime;
+    if (video.currentTime >= activeClip.endTime || video.currentTime < activeClip.startTime - 0.25) {
+      video.currentTime = activeClip.startTime;
+    }
+    setPreviewProgress(length > 0 ? Math.min(1, Math.max(0, (video.currentTime - activeClip.startTime) / length)) : 0);
+  };
+
+  const handlePreviewRestart = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (!activeClip) return;
+    const video = e.currentTarget;
+    video.currentTime = activeClip.startTime;
+    if (e.type === 'ended' && isPlaying) video.play().catch(() => setIsPlaying(false));
+  };
+
   const handleTogglePlay = () => {
     if (videoRef.current) {
       if (isPlaying) videoRef.current.pause();
@@ -361,14 +449,32 @@ const App: React.FC = () => {
     setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, ...updates } : p));
   };
 
-  const handleUpdateClip = async (id: string, updates: Partial<Clip>) => {
-    const updatedClips = project.clips.map(c => c.id === id ? { ...c, ...updates } : c);
-    updateCurrentProject({ clips: updatedClips });
+  // Updates one clip on top of the latest state. Async results (upload, download)
+  // use the project and clip they started on, so edits made meanwhile, or a switch
+  // to another project, are never overwritten.
+  const updateClipInProject = (projectId: string, clipId: string, updates: Partial<Clip>) => {
+    setProjects(prev => prev.map(p => p.id === projectId
+      ? { ...p, clips: p.clips.map(c => c.id === clipId ? { ...c, ...updates } : c) }
+      : p));
+  };
+
+  const setClipFlag = (setFlags: React.Dispatch<React.SetStateAction<Record<string, boolean>>>, clipId: string, value: boolean) => {
+    setFlags(prev => {
+      const next = { ...prev };
+      if (value) next[clipId] = true;
+      else delete next[clipId];
+      return next;
+    });
+  };
+
+  const handleUpdateClip = (id: string, updates: Partial<Clip>) => {
+    updateClipInProject(project.id, id, updates);
   };
 
   const handleDownloadUrl = async (clipId: string, url: string) => {
-    setDownloadingClipId(clipId);
-    setDownloadErrors({ ...downloadErrors, [clipId]: '' });
+    const projectId = project.id;
+    setClipFlag(setDownloadingClipIds, clipId, true);
+    setDownloadErrors(prev => ({ ...prev, [clipId]: '' }));
 
     try {
       if (!url || !url.trim()) {
@@ -376,119 +482,40 @@ const App: React.FC = () => {
       }
 
       console.log(`[DOWNLOAD] Iniciando descarga de ${url}`);
+      const { videoUrl, duration, platform, filename } = await downloadVideoFromUrl(url.trim());
 
-      const response = await fetch('http://localhost:3001/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
-        body: JSON.stringify({ url: url.trim() })
-      });
-
-      console.log(`[DOWNLOAD] Response status: ${response.status}`);
-
-      const responseText = await response.text();
-      console.log(`[DOWNLOAD] Response body (raw):`, responseText);
-
-      if (!response.ok) {
-        try {
-          const error = JSON.parse(responseText);
-          console.log(`[DOWNLOAD] Error JSON parsed:`, error);
-          throw new Error(error.error || `HTTP ${response.status}: Download failed`);
-        } catch (parseErr) {
-          console.error(`[DOWNLOAD] Failed to parse error response:`, parseErr);
-          throw new Error(`HTTP ${response.status}: ${responseText || 'Unknown error'}`);
-        }
-      }
-
-      try {
-        const data = JSON.parse(responseText);
-        console.log(`[DOWNLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration, platform, filename } = data;
-
-        const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
-        const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
-        );
-        updateCurrentProject({ clips: updatedClips });
-        setDownloadErrors({ ...downloadErrors, [clipId]: '' });
-        console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${absoluteVideoUrl}`);
-      } catch (parseErr) {
-        console.error(`[DOWNLOAD] Failed to parse success response:`, parseErr);
-        throw new Error('Invalid response from server');
-      }
-    } catch (err: any) {
-      const errorMsg = err.message || 'Download failed';
-      setDownloadErrors({ ...downloadErrors, [clipId]: errorMsg });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, sourceUrl: url.trim(), duration, ...initialTrim(duration) });
+      console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${videoUrl}`);
+    } catch (err) {
+      const errorMsg = (err instanceof Error && err.message) || 'Download failed';
+      setDownloadErrors(prev => ({ ...prev, [clipId]: errorMsg }));
       console.error(`[DOWNLOAD] Download error for clip ${clipId}:`, errorMsg);
     } finally {
-      setDownloadingClipId(null);
+      setClipFlag(setDownloadingClipIds, clipId, false);
     }
   };
 
   const handleFileUpload = async (clipId: string, file: File) => {
-    setUploadingClipId(clipId);
-    setUploadErrors({ ...uploadErrors, [clipId]: '' });
+    const projectId = project.id;
+    setClipFlag(setUploadingClipIds, clipId, true);
+    setUploadErrors(prev => ({ ...prev, [clipId]: '' }));
 
     try {
       if (file.type !== 'video/mp4') {
         throw new Error('Only .mp4 files are allowed');
       }
 
-      const formData = new FormData();
-      formData.append('video', file);
+      console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`);
+      const { videoUrl, duration, filename } = await uploadVideoFile(file);
 
-      console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB) a http://localhost:3001/api/upload`);
-
-      const response = await fetch('http://localhost:3001/api/upload', {
-        method: 'POST',
-        headers: APP_REQUEST_HEADERS,
-        body: formData
-      });
-
-      console.log(`[UPLOAD] Response status: ${response.status}`);
-      console.log(`[UPLOAD] Response headers:`, {
-        contentType: response.headers.get('content-type'),
-        contentLength: response.headers.get('content-length')
-      });
-
-      // Read response as text first to see what we actually got
-      const responseText = await response.text();
-      console.log(`[UPLOAD] Response body (raw):`, responseText);
-
-      if (!response.ok) {
-        try {
-          const error = JSON.parse(responseText);
-          console.log(`[UPLOAD] Error JSON parsed:`, error);
-          throw new Error(error.error || `HTTP ${response.status}: Upload failed`);
-        } catch (parseErr) {
-          console.error(`[UPLOAD] Failed to parse error response:`, parseErr);
-          throw new Error(`HTTP ${response.status}: ${responseText || 'Unknown error'}`);
-        }
-      }
-
-      // Parse success response
-      try {
-        const data = JSON.parse(responseText);
-        console.log(`[UPLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration, filename } = data;
-
-        const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
-        const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
-        );
-        updateCurrentProject({ clips: updatedClips });
-        setUploadErrors({ ...uploadErrors, [clipId]: '' });
-        console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${absoluteVideoUrl}`);
-      } catch (parseErr) {
-        console.error(`[UPLOAD] Failed to parse success response:`, parseErr);
-        throw new Error('Invalid response from server');
-      }
-    } catch (err: any) {
-      const errorMsg = err.message || 'Upload failed';
-      setUploadErrors({ ...uploadErrors, [clipId]: errorMsg });
+      updateClipInProject(projectId, clipId, { url: videoUrl, assetId: filename, duration, ...initialTrim(duration) });
+      console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${videoUrl}`);
+    } catch (err) {
+      const errorMsg = (err instanceof Error && err.message) || 'Upload failed';
+      setUploadErrors(prev => ({ ...prev, [clipId]: errorMsg }));
       console.error(`[UPLOAD] Upload error for clip ${clipId}:`, errorMsg);
-      console.error(`[UPLOAD] Full error object:`, err);
     } finally {
-      setUploadingClipId(null);
+      setClipFlag(setUploadingClipIds, clipId, false);
     }
   };
 
@@ -500,23 +527,98 @@ const App: React.FC = () => {
     setActiveTab('editor');
   };
 
+  const formatExportStep = (step: ExportStep) => {
+    switch (step.key) {
+      case 'renderingOverlays':
+        return t.exportStepOverlays.replace('{n}', String(step.clip ?? '')).replace('{total}', String(step.total ?? ''));
+      case 'processingClip':
+        return t.exportStepClip.replace('{n}', String(step.clip ?? '')).replace('{total}', String(step.total ?? ''));
+      case 'concatenating':
+        return t.exportStepConcat;
+      case 'cleaningUp':
+        return t.exportStepCleanup;
+      case 'completed':
+        return t.exportStepDone;
+      default:
+        return t.exportStepQueued;
+    }
+  };
+
+  const getExportErrorLines = (error: ExportErrorInfo): string[] => {
+    switch (error.kind) {
+      case 'noClips':
+        return [t.exportErrorNoClips];
+      case 'validation':
+        return [t.exportErrorValidation, ...(error.issues || []).map(issue =>
+          (issue.reason === 'missingVideo' ? t.exportErrorMissingVideo : t.exportErrorInvalidTrim).replace('{n}', String(issue.clipNumber))
+        )];
+      case 'network':
+        return [t.exportErrorNetwork];
+      case 'timeout':
+        return [t.exportErrorTimeout];
+      case 'render':
+        return [t.exportErrorRender];
+      default:
+        return error.message ? [t.exportErrorServer, error.message] : [t.exportErrorServer];
+    }
+  };
+
+  // The rank list animates the active clip for 500 ms; the layer is taken after it settles
+  const OVERLAY_SETTLE_MS = 600;
+
+  // P1-04: the design layer of each clip is rendered from the live preview (the
+  // preview switches to every clip in turn), so the video shows what the user sees.
+  const renderClipOverlays = async (clips: Clip[]): Promise<Record<string, string>> => {
+    const canvas = previewContainerRef.current;
+    if (!canvas) return {};
+    const previousClipId = activeClipId;
+    const overlayIds: Record<string, string> = {};
+    try {
+      for (let i = 0; i < clips.length; i++) {
+        setExportStep({ key: 'renderingOverlays', clip: i + 1, total: clips.length });
+        setActiveClipId(clips[i].id);
+        await new Promise(resolve => setTimeout(resolve, OVERLAY_SETTLE_MS));
+        let png: Blob;
+        try {
+          png = await renderOverlayPng(canvas);
+        } catch (error) {
+          console.error('[EXPORT] Design layer rendering failed:', error);
+          throw new ExportFailure({ kind: 'render' });
+        }
+        overlayIds[clips[i].id] = (await uploadOverlay(png)).overlayId;
+      }
+    } finally {
+      setActiveClipId(previousClipId);
+    }
+    return overlayIds;
+  };
+
   const handleExport = async () => {
+    setExportError(null);
     if (project.clips.length === 0) {
-      setExportError('No clips to export');
+      setExportError({ kind: 'noClips' });
+      return;
+    }
+    const issues = getExportIssues(project.clips);
+    if (issues.length > 0) {
+      setExportError({ kind: 'validation', issues });
       return;
     }
 
     setIsExporting(true);
     setExportProgress(0);
-    setExportError(null);
+    setExportStep({ key: 'queued' });
 
     try {
       // Prepare export request with all project data
-      const exportRequest = {
+      const exportRequest: ExportRequest = {
         projectId: project.id,
         title: project.title,
         titlePosition: project.titlePosition,
         titleStroke: project.titleStroke,
+        // Old or hand-edited projects may hold values the server rejects
+        background: /^#[0-9A-Fa-f]{6}$/.test(project.background) ? project.background : '#000000',
+        videoHeight: Number.isFinite(project.videoHeight) ? Math.min(100, Math.max(10, project.videoHeight)) : 100,
         clips: project.clips.map((clip: Clip) => ({
           id: clip.id,
           assetId: getClipAssetId(clip),
@@ -535,7 +637,7 @@ const App: React.FC = () => {
         titlePosition: exportRequest.titlePosition,
         titleStroke: exportRequest.titleStroke,
         clipsCount: exportRequest.clips.length,
-        clips: exportRequest.clips.map((c: any) => ({
+        clips: exportRequest.clips.map(c => ({
           id: c.id,
           assetId: c.assetId,
           startTime: c.startTime,
@@ -545,82 +647,61 @@ const App: React.FC = () => {
         }))
       });
 
-      // Step 1: Create export job
-      const createResponse = await fetch('http://localhost:3001/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
-        body: JSON.stringify(exportRequest)
-      });
-
-      if (!createResponse.ok) {
-        const errorData = await createResponse.json();
-        throw new Error(errorData.error || 'Failed to start export');
-      }
-
-      const { jobId } = await createResponse.json();
+      // Step 1: Design layer of every clip, then the job
+      const overlayIds = await renderClipOverlays(project.clips);
+      exportRequest.clips.forEach(clip => { clip.overlayId = overlayIds[clip.id]; });
+      setExportStep({ key: 'queued' });
+      const { jobId } = await createExportJob(exportRequest);
       setExportJobId(jobId);
 
       // Step 2: Poll for job status every 500ms (max 600 attempts = 5 minutes)
-      let completed = false;
-      let lastError: string | null = null;
-      const MAX_RETRIES = 600;
-      let retries = 0;
-
-      while (!completed && !lastError && retries < MAX_RETRIES) {
+      const MAX_POLLS = 600;
+      for (let poll = 0; ; poll++) {
+        if (poll >= MAX_POLLS) throw new ExportFailure({ kind: 'timeout' });
         await new Promise(resolve => setTimeout(resolve, 500));
-        retries++;
 
+        let status;
         try {
-          const statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`, {
-            signal: AbortSignal.timeout(5000)
-          });
-          if (!statusResponse.ok) {
-            throw new Error(`Backend returned ${statusResponse.status}: ${statusResponse.statusText}`);
-          }
-
-          const status = await statusResponse.json();
-          setExportProgress(status.progress);
-
-          if (status.status === 'completed') {
-            completed = true;
-            // Download the file
-            const link = document.createElement('a');
-            link.href = `http://localhost:3001${status.downloadUrl}`;
-            link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          } else if (status.status === 'error') {
-            lastError = status.error || 'Unknown export error';
-            throw new Error(lastError);
-          }
-        } catch (pollError) {
-          const pollMessage = pollError instanceof Error ? pollError.message : 'Unknown error';
-          if (pollMessage.includes('AbortError') || pollMessage.includes('timeout')) {
-            // Timeout on this request, but continue polling
-            continue;
-          }
-          throw new Error(`Export status check failed: ${pollMessage}`);
+          status = await getExportJobStatus(jobId, 5000);
+        } catch (e) {
+          // A slow status response is retried on the next poll
+          if (e instanceof DOMException && e.name === 'TimeoutError') continue;
+          throw e;
         }
-      }
+        setExportProgress(status.progress);
+        if (status.step) setExportStep(status.step);
 
-      // Check if we hit max retries
-      if (retries >= MAX_RETRIES && !completed) {
-        throw new Error('Exportación tardó demasiado. El servidor puede estar muy ocupado.');
+        if (status.status === 'error') {
+          throw new ExportFailure({ kind: 'server', message: status.error || undefined });
+        }
+        if (status.status === 'completed' && status.downloadUrl) {
+          // Download the file
+          const link = document.createElement('a');
+          link.href = apiUrl(status.downloadUrl);
+          link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          break;
+        }
       }
 
       // Success - keep progress bar visible for a moment
       setTimeout(() => {
         setIsExporting(false);
         setExportProgress(0);
+        setExportStep(null);
         setExportJobId(null);
       }, 1500);
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Export failed';
-      setExportError(errorMessage);
+      if (error instanceof ExportFailure) setExportError(error.info);
+      else if (error instanceof ApiNetworkError) setExportError({ kind: 'network' });
+      else if (error instanceof ApiResponseError) setExportError({ kind: 'server', message: error.message });
+      else setExportError({ kind: 'server', message: error instanceof Error ? error.message : undefined });
       setIsExporting(false);
       setExportProgress(0);
+      setExportStep(null);
       setExportJobId(null);
     }
   };
@@ -651,24 +732,11 @@ const App: React.FC = () => {
       if (isDragging && previewContainerRef.current && titleElementRef.current) {
         const containerRect = previewContainerRef.current.getBoundingClientRect();
         const titleRect = titleElementRef.current.getBoundingClientRect();
-
-        let x = e.clientX - containerRect.left - containerRect.width / 2 - dragOffset.x;
-        let y = e.clientY - containerRect.top - containerRect.height / 2 - dragOffset.y;
-
-        const titleWidth = titleRect.width;
-        const titleHeight = titleRect.height;
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-
-        const maxX = containerWidth / 2 - titleWidth / 2;
-        const minX = -containerWidth / 2 + titleWidth / 2;
-        const maxY = containerHeight / 2 - titleHeight / 2;
-        const minY = -containerHeight / 2 + titleHeight / 2;
-
-        x = Math.max(minX, Math.min(maxX, x));
-        y = Math.max(minY, Math.min(maxY, y));
-
-        updateCurrentProject({ titlePosition: { x, y } });
+        const titlePosition = clampPosition({
+          fx: (e.clientX - dragOffset.x - containerRect.left) / containerRect.width,
+          fy: (e.clientY - dragOffset.y - containerRect.top) / containerRect.height
+        }, titleRect.width / 2 / containerRect.width, titleRect.height / 2 / containerRect.height);
+        updateCurrentProject({ titlePosition });
       }
     };
     const handleGlobalMouseUp = () => setIsDragging(false);
@@ -687,27 +755,11 @@ const App: React.FC = () => {
       if (isDraggingClipTitle && previewContainerRef.current && clipTitleElementRef.current && activeClipId) {
         const containerRect = previewContainerRef.current.getBoundingClientRect();
         const clipTitleRect = clipTitleElementRef.current.getBoundingClientRect();
-
-        let x = e.clientX - containerRect.left - containerRect.width / 2 - (clipTitleDragStart?.x || 0);
-        let y = e.clientY - containerRect.top - containerRect.height / 2 - (clipTitleDragStart?.y || 0);
-
-        const titleWidth = clipTitleRect.width;
-        const titleHeight = clipTitleRect.height;
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-
-        const maxX = containerWidth / 2 - titleWidth / 2;
-        const minX = -containerWidth / 2 + titleWidth / 2;
-        const maxY = containerHeight / 2 - titleHeight / 2;
-        const minY = -containerHeight / 2 + titleHeight / 2;
-
-        x = Math.max(minX, Math.min(maxX, x));
-        y = Math.max(minY, Math.min(maxY, y));
-
-        const updatedClips = project.clips.map(clip =>
-          clip.id === activeClipId ? { ...clip, clipTitlePosition: { x, y } } : clip
-        );
-        updateCurrentProject({ clips: updatedClips });
+        const clipTitlePosition = clampPosition({
+          fx: (e.clientX - (clipTitleDragStart?.x || 0) - containerRect.left) / containerRect.width,
+          fy: (e.clientY - (clipTitleDragStart?.y || 0) - containerRect.top) / containerRect.height
+        }, clipTitleRect.width / 2 / containerRect.width, clipTitleRect.height / 2 / containerRect.height);
+        updateClipInProject(project.id, activeClipId, { clipTitlePosition });
       }
     };
     const handleClipTitleMouseUp = () => setIsDraggingClipTitle(false);
@@ -719,7 +771,7 @@ const App: React.FC = () => {
       window.removeEventListener('mousemove', handleClipTitleMouseMove);
       window.removeEventListener('mouseup', handleClipTitleMouseUp);
     };
-  }, [isDraggingClipTitle, clipTitleDragStart, activeClipId, project.clips]);
+  }, [isDraggingClipTitle, clipTitleDragStart, activeClipId, project.id]);
 
   const toggleHighlight = (index: number) => {
     const newIndices = project.highlightedIndices.includes(index)
@@ -754,11 +806,13 @@ const App: React.FC = () => {
       <div
         ref={titleElementRef}
         onMouseDown={handleDragStart}
-        className={`relative inline-block ${currentStyle.shadow} ${project.enableTitleDrag ? 'cursor-move active:scale-95' : 'pointer-events-auto'}`}
+        className={`absolute w-max pointer-events-auto ${currentStyle.shadow} ${project.enableTitleDrag ? 'cursor-move' : ''}`}
         style={{
-          transform: `translate(${project.titlePosition.x}px, ${project.titlePosition.y}px)`,
-          zIndex: 60,
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+          left: project.titlePosition.fx * PREVIEW_STAGE.width,
+          top: project.titlePosition.fy * PREVIEW_STAGE.height,
+          maxWidth: PREVIEW_STAGE.width,
+          transform: 'translate(-50%, -50%)',
+          zIndex: 60
         }}
       >
         <div 
@@ -796,10 +850,36 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-10">
           <div className="max-w-md w-full text-center space-y-10">
             <Film size={64} className="text-blue-500 mx-auto animate-pulse" />
-            <h2 className="text-4xl font-black text-white uppercase tracking-tighter">Encoding...</h2>
+            <h2 className="text-4xl font-black text-white uppercase tracking-tighter">{t.exportingBtn}</h2>
             <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden border border-white/10 shadow-[0_0_20px_rgba(37,99,235,0.2)]">
               <div className="h-full bg-blue-600 transition-all duration-300 shadow-[0_0_15px_rgba(37,99,235,0.8)]" style={{ width: `${exportProgress}%` }}></div>
             </div>
+            <p className="text-sm font-bold text-gray-400 tracking-tight">
+              {exportStep ? formatExportStep(exportStep) : t.exportStepQueued} · {Math.round(exportProgress)}%
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Export error banner */}
+      {exportError && !isExporting && (
+        <div role="alert" className={`fixed top-6 left-1/2 -translate-x-1/2 z-[110] w-[calc(100%-2rem)] max-w-lg rounded-[24px] border p-6 shadow-2xl ${isDarkMode ? 'bg-[#1a1a1a] border-red-500/30' : 'bg-white border-red-200'}`}>
+          <div className="flex items-start gap-4">
+            <AlertCircle size={24} className="text-red-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0 space-y-2">
+              <h3 className={`text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{t.exportErrorTitle}</h3>
+              {getExportErrorLines(exportError).map((line, index) => (
+                <p key={index} className={`text-sm font-medium break-words ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>{line}</p>
+              ))}
+            </div>
+            <button onClick={() => setExportError(null)} aria-label={t.exportDismiss} title={t.exportDismiss} className={`p-2 rounded-xl transition-all ${isDarkMode ? 'text-gray-500 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="flex justify-end mt-4">
+            <button onClick={handleExport} className="px-6 py-2.5 bg-blue-600 text-white rounded-2xl text-xs font-black inline-flex items-center gap-2 shadow-xl hover:scale-105 active:scale-95 transition-all">
+              <RotateCcw size={14} /> {t.exportRetry}
+            </button>
           </div>
         </div>
       )}
@@ -946,7 +1026,7 @@ const App: React.FC = () => {
                   )}
 
                   <div className={`aspect-video rounded-2xl mb-6 overflow-hidden relative flex items-center justify-center ${isDarkMode ? 'bg-black' : 'bg-gray-100'}`}>
-                    {p.clips[0]?.url ? <video src={p.clips[0].url} className="w-full h-full object-cover opacity-60" /> : <Film size={40} className={isDarkMode ? 'text-white/5' : 'text-gray-200'} />}
+                    {p.clips[0]?.url ? <video src={resolveMediaUrl(p.clips[0].url)} className="w-full h-full object-cover opacity-60" /> : <Film size={40} className={isDarkMode ? 'text-white/5' : 'text-gray-200'} />}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-6">
                       <span className="text-white text-xs font-black uppercase tracking-widest flex items-center gap-2"><Play size={12} fill="white"/> {lang === 'es' ? 'Continuar Editando' : 'Continue Editing'}</span>
                     </div>
@@ -1163,7 +1243,7 @@ const App: React.FC = () => {
                     onClick={() => {
                       const nextRank = project.clips.length + 1;
                       const newClip: Clip = { id: `clip_${Date.now()}`, url: '', startTime: 0, endTime: 5, rank: nextRank, title: `Rank #${nextRank} Item`, titleStyleId: 'BLUE_BOX' };
-                      updateCurrentProject({ clips: [...project.clips, newClip] });
+                      updateCurrentProject({ clips: renumberClips([...project.clips, newClip]) });
                       setActiveClipId(newClip.id);
                     }}
                     disabled={project.clips.length >= 10}
@@ -1182,8 +1262,11 @@ const App: React.FC = () => {
                     key={clip.id} clip={clip} index={index} active={activeClipId === clip.id}
                     onClick={() => setActiveClipId(clip.id)}
                     onUpdate={handleUpdateClip}
+                    onMove={(id, offset) => updateCurrentProject({ clips: moveClip(project.clips, id, offset) })}
+                    isFirst={index === 0}
+                    isLast={index === project.clips.length - 1}
                     onRemove={(id) => {
-                      const updated = project.clips.filter(c => c.id !== id);
+                      const updated = renumberClips(project.clips.filter(c => c.id !== id));
                       updateCurrentProject({ clips: updated });
                       if (activeClipId === id) setActiveClipId(updated[0]?.id || null);
                     }}
@@ -1193,10 +1276,10 @@ const App: React.FC = () => {
                     onOpenMenu={setMenuOpenId}
                     lang={lang}
                     onFileUpload={handleFileUpload}
-                    uploadingClipId={uploadingClipId}
+                    isUploading={Boolean(uploadingClipIds[clip.id])}
                     uploadError={uploadErrors}
                     onDownloadUrl={handleDownloadUrl}
-                    downloadingClipId={downloadingClipId}
+                    isDownloading={Boolean(downloadingClipIds[clip.id])}
                     downloadError={downloadErrors}
                   />
                 ))}
@@ -1207,26 +1290,29 @@ const App: React.FC = () => {
             {/* Video Preview Container */}
             <div className="w-full lg:w-[540px] p-10 lg:sticky lg:top-0 h-fit z-20 flex flex-col items-center gap-4">
               {/* Preview Visual */}
-              <div ref={previewContainerRef} className="relative aspect-[9/16] rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full flex flex-col items-center justify-center select-none flex-shrink-0" style={{ backgroundColor: project.background }}>
-                <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
-                  <div className="pointer-events-auto">{renderViralTitle()}</div>
+              <div className="relative rounded-[52px] overflow-hidden border-[14px] border-[#1a1a1a] shadow-[0_0_120px_rgba(0,0,0,0.8)] w-full select-none flex-shrink-0">
+              <div ref={setPreviewContainer} className="relative w-full aspect-[9/16] overflow-hidden flex flex-col items-center justify-center" style={{ backgroundColor: project.background }}>
+                <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
+                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay playsInline className="w-full h-full object-cover" onLoadedMetadata={handlePreviewRestart} onTimeUpdate={handlePreviewTimeUpdate} onEnded={handlePreviewRestart} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
+                </div>
+                {/* Overlay stage: laid out at PREVIEW_STAGE size, scaled to the canvas */}
+                <div className="absolute top-0 left-0 z-50 pointer-events-none origin-top-left" style={{ width: PREVIEW_STAGE.width, height: PREVIEW_STAGE.height, transform: `scale(${previewScale})` }}>
+                  {renderViralTitle()}
                   {activeClip && activeClip.title && (
                     <div
                       ref={clipTitleElementRef}
                       onMouseDown={handleClipTitleDragStart}
-                      className={`absolute px-4 py-2 rounded-sm tracking-tighter pointer-events-auto cursor-move ${isDraggingClipTitle ? 'select-none' : ''} transition-transform duration-100`}
+                      className={`absolute w-max px-4 py-2 rounded-sm tracking-tighter pointer-events-auto cursor-move ${isDraggingClipTitle ? 'select-none' : ''}`}
                       style={{
-                        transform: `translate(${activeClip.clipTitlePosition?.x || 0}px, ${activeClip.clipTitlePosition?.y || 0}px)`,
-                        transition: isDraggingClipTitle ? 'none' : 'transform 0.1s ease-out'
+                        left: (activeClip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION).fx * PREVIEW_STAGE.width,
+                        top: (activeClip.clipTitlePosition ?? DEFAULT_CLIP_TITLE_POSITION).fy * PREVIEW_STAGE.height,
+                        maxWidth: PREVIEW_STAGE.width,
+                        transform: 'translate(-50%, -50%)'
                       }}
                     >
                       {renderClipTitle()}
                     </div>
                   )}
-                </div>
-                <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
-                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={activeClip.url} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
-                </div>
                 {(() => {
                   const layoutConfig = getClipLayoutConfig(project.clips.length);
                   const fontSizeMap: Record<string, number> = { 'text-5xl': 64, 'text-4xl': 48, 'text-3xl': 30, 'text-2xl': 24 };
@@ -1252,6 +1338,8 @@ const App: React.FC = () => {
                     </div>
                   );
                 })()}
+                </div>
+              </div>
               </div>
 
               {/* Control Panel - OUTSIDE Preview */}
@@ -1262,7 +1350,7 @@ const App: React.FC = () => {
                     <button onClick={handleTogglePlay} className="p-3 bg-white text-black rounded-full shadow-lg hover:scale-110 active:scale-90 transition-all">{isPlaying ? <PauseCircle size={24} fill="black" /> : <PlayCircle size={24} fill="black" />}</button>
                     <button onClick={() => { const nextIdx = (activeClipIndex + 1) % project.clips.length; if (project.clips[nextIdx]) setActiveClipId(project.clips[nextIdx].id); }} className="text-white/40 hover:text-white transition-all"><ChevronRight size={24} /></button>
                   </div>
-                  <div className="px-4"><div className={`h-1.5 w-full rounded-full relative overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-black/10'}`}><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: videoRef.current ? `${(videoRef.current.currentTime / videoRef.current.duration) * 100}%` : '0%' }}></div></div></div>
+                  <div className="px-4"><div className={`h-1.5 w-full rounded-full relative overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-black/10'}`}><div className="absolute top-0 left-0 h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" style={{ width: `${previewProgress * 100}%` }}></div></div></div>
                 </div>
               </div>
             </div>
@@ -1301,13 +1389,34 @@ const ToolbarDropdown: React.FC<{ label?: string | React.ReactNode, icon?: React
   <button className={`flex items-center gap-1 p-2 rounded-lg transition-all ${isDarkMode ? 'text-gray-500 hover:bg-white/5 hover:text-white' : 'text-gray-600 hover:bg-white hover:text-black'}`}>{label || icon} <ChevronDown size={14} className="opacity-50" /></button>
 );
 
-const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: any, onRemove: any, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, uploadingClipId?: string | null, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, downloadingClipId?: string | null, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, uploadingClipId, uploadError, onDownloadUrl, downloadingClipId, downloadError }) => {
+const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: () => void, onUpdate: (id: string, updates: Partial<Clip>) => void, onRemove: (id: string) => void, onMove: (id: string, offset: -1 | 1) => void, isFirst: boolean, isLast: boolean, isProcessing?: boolean, isDarkMode: boolean, menuOpenId: string | null, onOpenMenu: (id: string | null) => void, lang: 'en' | 'es', onFileUpload?: (clipId: string, file: File) => void, isUploading?: boolean, uploadError?: Record<string, string>, onDownloadUrl?: (clipId: string, url: string) => void, isDownloading?: boolean, downloadError?: Record<string, string> }> = ({ clip, index, active, onClick, onUpdate, onRemove, onMove, isFirst, isLast, isProcessing, isDarkMode, menuOpenId, onOpenMenu, lang, onFileUpload, isUploading = false, uploadError, onDownloadUrl, isDownloading = false, downloadError }) => {
   const [sourceTab, setSourceTab] = useState<'url' | 'upload'>('url');
+  // What the user types stays local: a download starts only on Enter, paste or the button
+  const [urlDraft, setUrlDraft] = useState(clip.sourceUrl ?? '');
+  useEffect(() => { setUrlDraft(clip.sourceUrl ?? ''); }, [clip.sourceUrl]);
   const isMenuOpen = menuOpenId === clip.id;
-  const isUploading = uploadingClipId === clip.id;
-  const isDownloading = downloadingClipId === clip.id;
   const uploadErr = uploadError?.[clip.id];
   const downloadErr = downloadError?.[clip.id];
+  // Typed trim values are drafts until blur or Enter, then clamped to a valid range
+  const [startDraft, setStartDraft] = useState(String(clip.startTime));
+  const [endDraft, setEndDraft] = useState(String(clip.endTime));
+  useEffect(() => { setStartDraft(String(clip.startTime)); }, [clip.startTime]);
+  useEffect(() => { setEndDraft(String(clip.endTime)); }, [clip.endTime]);
+
+  const commitTrim = (edited: 'start' | 'end') => {
+    const startTime = edited === 'start' ? parseFloat(startDraft) : clip.startTime;
+    const endTime = edited === 'end' ? parseFloat(endDraft) : clip.endTime;
+    const trim = clampTrim(startTime, endTime, clip.duration, edited);
+    setStartDraft(String(trim.startTime));
+    setEndDraft(String(trim.endTime));
+    if (trim.startTime !== clip.startTime || trim.endTime !== clip.endTime) onUpdate(clip.id, trim);
+  };
+
+  const handleSubmitUrl = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || isDownloading || !onDownloadUrl) return;
+    onDownloadUrl(clip.id, trimmed);
+  };
   const handleTitleTransform = (type: 'upper' | 'lower' | 'capitalize') => { let newTitle = clip.title; if (type === 'upper') newTitle = clip.title.toUpperCase(); if (type === 'lower') newTitle = clip.title.toLowerCase(); if (type === 'capitalize') newTitle = clip.title.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' '); onUpdate(clip.id, { title: newTitle }); onOpenMenu(null); };
   return (
     <div onClick={onClick} className={`rounded-[32px] border transition-all cursor-pointer p-8 relative ${active ? (isDarkMode ? 'border-blue-500/40 bg-[#161616] shadow-2xl' : 'border-blue-300 bg-blue-50/30 shadow-xl') : (isDarkMode ? 'border-white/5 bg-[#111] hover:border-white/10' : 'bg-white border-gray-100 hover:border-gray-200 hover:shadow-md')}`}>
@@ -1319,14 +1428,18 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
         <div className="flex items-center gap-3 relative">
           <button onClick={e => { e.stopPropagation(); onOpenMenu(isMenuOpen ? null : clip.id); }} className={`p-3 rounded-2xl transition-all relative z-10 ${isMenuOpen || active ? 'text-blue-400 bg-blue-600/10' : 'text-blue-500/40 hover:text-blue-400 hover:bg-blue-400/10'}`}><ChevronRight size={22} className={`transition-transform duration-300 ${isMenuOpen ? 'rotate-90' : ''}`} /></button>
           {isMenuOpen && <div onClick={e => e.stopPropagation()} className={`absolute top-full right-0 mt-2 w-48 rounded-2xl border p-2 shadow-[0_20px_50px_rgba(0,0,0,0.2)] z-[100] animate-in fade-in zoom-in-95 duration-200 ${isDarkMode ? 'bg-[#1a1a1a] border-white/10' : 'bg-white border-gray-200'}`}><div className="flex flex-col gap-1"><button onClick={() => handleTitleTransform('upper')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'MAYÚSCULAS' : 'UPPERCASE'}</button><button onClick={() => handleTitleTransform('lower')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'minúsculas' : 'lowercase'}</button><button onClick={() => handleTitleTransform('capitalize')} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><TypeIconComponent size={14} className="text-blue-500" /> {lang === 'es' ? 'Capitalizar' : 'Capitalize'}</button><div className={`h-px w-full my-1 ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}></div><button onClick={() => { onUpdate(clip.id, { titleItalic: !clip.titleItalic }); onOpenMenu(null); }} className={`flex items-center justify-between px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${isDarkMode ? 'hover:bg-white/5 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-700 hover:text-black'}`}><div className="flex items-center gap-3"><Italic size={14} className={clip.titleItalic ? 'text-blue-500' : ''} /> {lang === 'es' ? 'Cursiva' : 'Italic'}</div>{clip.titleItalic && <CheckCircle2 size={12} className="text-blue-500" />}</button></div></div>}
+          <div className="flex flex-col">
+            <button type="button" onClick={e => { e.stopPropagation(); onMove(clip.id, -1); }} disabled={isFirst} aria-label={translations[lang].moveClipUp} title={translations[lang].moveClipUp} className={`p-1.5 rounded-lg transition-all disabled:opacity-20 disabled:pointer-events-none ${isDarkMode ? 'text-gray-600 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}><ArrowUp size={16} /></button>
+            <button type="button" onClick={e => { e.stopPropagation(); onMove(clip.id, 1); }} disabled={isLast} aria-label={translations[lang].moveClipDown} title={translations[lang].moveClipDown} className={`p-1.5 rounded-lg transition-all disabled:opacity-20 disabled:pointer-events-none ${isDarkMode ? 'text-gray-600 hover:text-white hover:bg-white/5' : 'text-gray-400 hover:text-black hover:bg-gray-100'}`}><ArrowDown size={16} /></button>
+          </div>
           <button onClick={e => { e.stopPropagation(); onRemove(clip.id); }} className={`p-3 transition-all rounded-2xl ${isDarkMode ? 'text-gray-600 hover:text-red-500 hover:bg-red-500/10' : 'text-gray-400 hover:text-red-600 hover:bg-red-50'}`}><Trash2 size={20}/></button>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={clip.url} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4 space-y-2" onClick={e => e.stopPropagation()}>
+        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={resolveMediaUrl(clip.url)} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4 space-y-2" onClick={e => e.stopPropagation()}>
             <div className="flex gap-2"><button onClick={() => setSourceTab('url')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'url' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Enlace' : 'URL'}</button><button onClick={() => setSourceTab('upload')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'upload' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Archivo' : 'File'}</button></div>
             {sourceTab === 'url' ? (
-              <div className={`flex items-center gap-3 backdrop-blur-xl border rounded-2xl px-5 py-3 shadow-2xl transition-colors ${isDarkMode ? 'bg-[#111]/90 border-white/10' : 'bg-white/90 border-gray-200 shadow-lg'}`}>{isDownloading ? <Loader2 size={14} className="animate-spin text-blue-500" /> : <LinkIcon size={14} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} />}<input type="text" placeholder={lang === 'es' ? "Pegar enlace viral..." : "Paste viral link..."} value={clip.url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const newUrl = e.target.value; onUpdate(clip.id, { url: newUrl }); const trimmedUrl = newUrl.trim(); if (!isDownloading && trimmedUrl && (trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://')) && onDownloadUrl) { onDownloadUrl(clip.id, trimmedUrl); } }} className={`bg-transparent border-none text-[11px] w-full focus:ring-0 font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`} disabled={isDownloading} /></div>
+              <div className={`flex items-center gap-3 backdrop-blur-xl border rounded-2xl px-5 py-3 shadow-2xl transition-colors ${isDarkMode ? 'bg-[#111]/90 border-white/10' : 'bg-white/90 border-gray-200 shadow-lg'}`}>{isDownloading ? <Loader2 size={14} className="animate-spin text-blue-500" /> : <LinkIcon size={14} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} />}<input type="text" placeholder={lang === 'es' ? "Pegar enlace viral..." : "Paste viral link..."} value={urlDraft} onClick={e => e.stopPropagation()} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrlDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSubmitUrl(urlDraft); } }} onPaste={(e: React.ClipboardEvent<HTMLInputElement>) => { const pasted = e.clipboardData.getData('text'); const input = e.currentTarget; if (pasted && input.selectionStart === 0 && input.selectionEnd === input.value.length) { e.preventDefault(); setUrlDraft(pasted); handleSubmitUrl(pasted); } }} className={`bg-transparent border-none text-[11px] w-full focus:ring-0 font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`} disabled={isDownloading} /><button type="button" onClick={e => { e.stopPropagation(); handleSubmitUrl(urlDraft); }} disabled={isDownloading || !urlDraft.trim()} aria-label={translations[lang].downloadFromLink} title={translations[lang].downloadFromLink} className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-white/10' : 'text-gray-500 hover:text-black hover:bg-gray-100'}`}><Download size={14} /></button></div>
             ) : (
               <div className={`flex items-center gap-2 relative ${isDarkMode ? 'bg-[#111]/90' : 'bg-white/90'} backdrop-blur-xl border rounded-2xl px-3 py-2 shadow-2xl transition-colors`}><input type="file" accept="video/mp4" onChange={e => { const file = e.target.files?.[0]; if (file && onFileUpload) onFileUpload(clip.id, file); }} disabled={isUploading} className={`hidden`} id={`file-${clip.id}`} /><label htmlFor={`file-${clip.id}`} className={`flex-1 flex items-center gap-2 cursor-pointer text-[11px] font-bold ${isUploading ? (isDarkMode ? 'text-gray-600' : 'text-gray-400') : (isDarkMode ? 'text-white' : 'text-gray-900')}`}>{isUploading ? <Loader2 size={14} className="animate-spin" /> : <VideoIcon size={14} />} {lang === 'es' ? 'Seleccionar archivo...' : 'Select file...'}</label></div>
             )}
@@ -1337,11 +1450,11 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
           <div className="grid grid-cols-2 gap-6" onClick={e => e.stopPropagation()}>
             <div className="space-y-2">
               <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Entrada" : "In-point"}</span>
-              <input type="number" step="0.1" value={clip.startTime} onChange={e => onUpdate(clip.id, { startTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+              <input type="number" step="0.1" min={0} max={clip.duration || undefined} value={startDraft} onChange={e => setStartDraft(e.target.value)} onBlur={() => commitTrim('start')} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
             </div>
             <div className="space-y-2">
               <span className={`text-[9px] font-black uppercase tracking-tighter transition-colors ${isDarkMode ? 'text-gray-700' : 'text-gray-600'}`}>{lang === 'es' ? "Punto de Salida" : "Out-point"}</span>
-              <input type="number" step="0.1" value={clip.endTime} onChange={e => onUpdate(clip.id, { endTime: parseFloat(e.target.value) || 0 })} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
+              <input type="number" step="0.1" min={0} max={clip.duration || undefined} value={endDraft} onChange={e => setEndDraft(e.target.value)} onBlur={() => commitTrim('end')} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} className={`w-full border rounded-xl px-4 py-3 text-sm font-bold focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors ${isDarkMode ? 'bg-[#151515] border-white/5 text-white' : 'bg-white border-gray-200 text-gray-900'}`} />
             </div>
           </div>
           {clip.url && clip.duration && <TrimTimeline duration={clip.duration} startTime={clip.startTime} endTime={clip.endTime} onStartChange={(newStart: number) => onUpdate(clip.id, { startTime: newStart })} onEndChange={(newEnd: number) => onUpdate(clip.id, { endTime: newEnd })} isDarkMode={isDarkMode} />}

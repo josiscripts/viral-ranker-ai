@@ -30,6 +30,10 @@ sudo apt-get install ffmpeg python3-pip
 pip install yt-dlp
 ```
 
+### YouTube: runtime de JavaScript para yt-dlp
+
+YouTube exige resolver un challenge de JavaScript. yt-dlp necesita para ello un runtime de JS (`deno`, que es el recomendado, o `node`) y los scripts del solver: el paquete oficial `yt-dlp-ejs`, o `--remote-components ejs:github`. Sin ellos, yt-dlp muestra el aviso `n challenge solving failed` y oculta parte de los formatos. Muchos vídeos se siguen descargando, pero algunos fallan con el mensaje *"YouTube download needs a JavaScript challenge solver"*. Detalles: https://github.com/yt-dlp/yt-dlp/wiki/EJS
+
 ## Instalación
 
 1. Ve a la carpeta del servidor:
@@ -65,11 +69,19 @@ Para compilar TypeScript a JavaScript:
 npm run build
 ```
 
-Para ejecutar el servidor compilado:
+Para ejecutar el servidor compilado (`npm start` recompila antes con `prestart`):
 
 ```bash
 npm start
 ```
+
+## Tests
+
+```bash
+npm test
+```
+
+Arrancan un servidor real en un puerto aleatorio con un `STORAGE_DIR` temporal, así que no tocan `storage/`. Los vídeos de prueba se generan con ffmpeg. Requisitos: ffmpeg y ffprobe en el PATH.
 
 ## Endpoints disponibles
 
@@ -83,6 +95,9 @@ Edita `.env` para personalizar:
 | Variable | Valor por defecto | Descripción |
 |----------|-------------------|-------------|
 | `PORT` | `3001` | Puerto en el que escucha el servidor |
+| `HOST` | `127.0.0.1` | Interfaz en la que escucha (solo local por defecto) |
+| `STORAGE_DIR` | `server/storage` | Carpeta de uploads, temporales y exports |
+| `FONT_FILE` | Inter incluida (`assets/fonts`) | Fuente `.ttf`/`.otf` de los títulos del export; si se define, se usa para todos los estilos |
 | `FRONTEND_URL` | `http://localhost:3000` | URL del frontend para CORS |
 | `NODE_ENV` | `development` | Entorno (development/production) |
 

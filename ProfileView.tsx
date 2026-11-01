@@ -379,15 +379,15 @@ const ProfileView: React.FC<ProfileViewProps> = ({
                 
                 <div className="grid grid-cols-3 gap-4">
                   {[
-                    { id: 'TikTok', name: 'TikTok', icon: <Smartphone size={16} />, color: 'hover:border-neutral-500 hover:text-black hover:bg-neutral-500/10' },
-                    { id: 'Reels', name: 'Reels', icon: <Instagram size={16} />, color: 'hover:border-pink-500 hover:text-pink-500 hover:bg-pink-500/10' },
-                    { id: 'Shorts', name: 'Shorts', icon: <Youtube size={16} />, color: 'hover:border-red-500 hover:text-red-500 hover:bg-red-500/10' }
+                    { id: 'TikTok' as const, name: 'TikTok', icon: <Smartphone size={16} />, color: 'hover:border-neutral-500 hover:text-black hover:bg-neutral-500/10' },
+                    { id: 'Reels' as const, name: 'Reels', icon: <Instagram size={16} />, color: 'hover:border-pink-500 hover:text-pink-500 hover:bg-pink-500/10' },
+                    { id: 'Shorts' as const, name: 'Shorts', icon: <Youtube size={16} />, color: 'hover:border-red-500 hover:text-red-500 hover:bg-red-500/10' }
                   ].map((p) => {
                     const isSelected = profile.defaultPlatform === p.id;
                     return (
                       <button
                         key={p.id}
-                        onClick={() => onUpdateProfile({ defaultPlatform: p.id as any })}
+                        onClick={() => onUpdateProfile({ defaultPlatform: p.id })}
                         className={`py-4 px-6 rounded-2xl border flex items-center justify-center gap-3 font-bold text-xs uppercase tracking-tight transition-all active:scale-95 ${isSelected ? 'border-blue-500 bg-blue-500/10 text-blue-500 shadow-lg' : (isDarkMode ? 'border-white/5 bg-white/5 text-gray-400 ' + p.color : 'border-gray-200 bg-gray-50 text-gray-700 ' + p.color)}`}
                       >
                         {p.icon}

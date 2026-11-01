@@ -2,30 +2,41 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runProcess } from './processRunner';
 
-interface TrimOptions {
-  inputPath: string;
-  outputPath: string;
-  startTime: number;
-  endTime: number;
+export const OUTPUT_WIDTH = 1080;
+export const OUTPUT_HEIGHT = 1920;
+const OUTPUT_FPS = 30;
+const OUTPUT_SAMPLE_RATE = 48000;
+const SEGMENT_TIMEOUT_MS = 5 * 60 * 1000;
+// The preview lays titles out on a 432x768 stage (utils/titleLayout.ts), 2.5x
+// smaller than the output: 16 px text there is 40 px here, and its 24 px line
+// height leaves ~12 px between lines on top of Inter's own line height.
+export const TITLE_FONT_SIZE = 40;
+const TITLE_LINE_SPACING = 12;
+
+export interface TextLayer {
+  text: string;
+  // Center of the text as fractions of the canvas, like the preview
+  fx: number;
+  fy: number;
+  fontSize: number;
+  color: string;
+  stroke: number;
+  font?: FontVariant;
 }
 
-interface DrawTextOptions {
+interface SegmentOptions {
   inputPath: string;
   outputPath: string;
-  // Directory where the title text files are written. ffmpeg runs with this
-  // directory as cwd so the filter only references plain relative file names.
   workDir: string;
   textFilePrefix: string;
-  mainTitle: string;
-  mainTitleX: number;
-  mainTitleY: number;
-  clipTitle?: string;
-  clipTitleX?: number;
-  clipTitleY?: number;
-  mainTitleColor: string;
-  mainTitleStroke: number;
-  clipTitleColor?: string;
-  clipTitleStroke?: number;
+  startTime: number;
+  endTime: number;
+  background: string;
+  videoHeightPercent: number; // share of the canvas height the video covers, like the preview
+  texts: TextLayer[];
+  // Transparent 1080x1920 PNG with the preview's design layer, drawn over the video
+  overlayPath?: string;
+  onProgress?: (fraction: number) => void;
 }
 
 interface ConcatOptions {
@@ -40,6 +51,14 @@ const toFilterNumber = (value: number, name: string): number => {
     throw new Error(`Invalid numeric value for ${name}`);
   }
   return Math.round(value);
+};
+
+// Positions only reach the filter graph as plain decimals in [0, 1]
+const toFilterFraction = (value: number, name: string): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`Invalid position value for ${name}`);
+  }
+  return value.toFixed(4);
 };
 
 // Only hex colors (with or without "#") or "white" ever reach the filter graph.
@@ -65,101 +84,119 @@ const SYSTEM_FONT_CANDIDATES: Record<string, string[]> = {
   ]
 };
 
-// FONT_FILE (env) wins over the system defaults. Paths are escaped for the filter
-// graph; paths containing quotes are rejected instead of escaped twice.
-const getFontFileOption = (): string => {
+// Inter (OFL), the preview's font, ships in server/assets/fonts. Same relative
+// path from src/services and from dist/services.
+export type FontVariant = 'bold' | 'boldItalic' | 'medium';
+const BUNDLED_FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
+const BUNDLED_FONT_FILES: Record<FontVariant, string> = {
+  bold: 'Inter-Bold.ttf',
+  boldItalic: 'Inter-BoldItalic.ttf',
+  medium: 'Inter-Medium.ttf'
+};
+
+// FONT_FILE (env) wins for every variant, then the bundled Inter, then system fonts.
+// Paths containing quotes are skipped instead of escaped twice in the filter graph.
+export const resolveFontFile = (variant: FontVariant = 'bold'): string => {
   const candidates = process.env.FONT_FILE
     ? [process.env.FONT_FILE]
-    : SYSTEM_FONT_CANDIDATES[process.platform] || [];
+    : [path.join(BUNDLED_FONTS_DIR, BUNDLED_FONT_FILES[variant]), ...(SYSTEM_FONT_CANDIDATES[process.platform] || [])];
   const fontFile = candidates.find(candidate => !candidate.includes("'") && fs.existsSync(candidate));
 
   if (!fontFile) {
     throw new Error('No font file available for video titles. Set FONT_FILE in server/.env to a .ttf/.otf file');
   }
+  return fontFile;
+};
 
-  const escaped = fontFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+const getFontFileOption = (variant: FontVariant = 'bold'): string => {
+  const escaped = resolveFontFile(variant).replace(/\\/g, '/').replace(/:/g, '\\:');
   return `:fontfile='${escaped}'`;
 };
 
-export async function trimClip(options: TrimOptions): Promise<void> {
-  const { inputPath, outputPath, startTime, endTime } = options;
-
-  console.log('DEBUG trimClip: outputPath =', outputPath);
-
-  try {
-    await runProcess('ffmpeg', [
-      ...FFMPEG_BASE_ARGS,
-      // Inputs are always server-side files; never let ffmpeg open network or other protocols
-      '-protocol_whitelist', 'file',
-      '-i', inputPath,
-      '-ss', String(startTime),
-      '-to', String(endTime),
-      '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-c:a', 'aac',
-      '-y', // overwrite output
-      outputPath
-    ]);
-  } catch (error: any) {
-    throw new Error(`FFmpeg trim error: ${error.stderr || error.message}`);
-  }
+export async function hasAudioStream(inputPath: string): Promise<boolean> {
+  const { stdout } = await runProcess('ffprobe', [
+    '-v', 'error', '-protocol_whitelist', 'file', '-select_streams', 'a',
+    '-show_entries', 'stream=index', '-of', 'csv=p=0', inputPath
+  ]);
+  return stdout.trim().length > 0;
 }
 
-export async function addTextOverlay(options: DrawTextOptions): Promise<void> {
-  const {
-    inputPath,
-    outputPath,
-    workDir,
-    textFilePrefix,
-    mainTitle,
-    mainTitleX,
-    mainTitleY,
-    clipTitle,
-    clipTitleX,
-    clipTitleY,
-    mainTitleColor,
-    mainTitleStroke,
-    clipTitleColor,
-    clipTitleStroke
-  } = options;
+// Seconds already encoded, from one chunk of `-progress pipe:1` output
+export function parseProgressSeconds(chunk: string): number | null {
+  const matches = [...chunk.matchAll(/out_time_us=(\d+)/g)];
+  return matches.length ? Number(matches[matches.length - 1][1]) / 1_000_000 : null;
+}
 
-  // Titles are written to files and read with textfile= + expansion=none, so no
-  // character of the title (quotes, ":", ",", "%", new lines...) is ever parsed
-  // as filter syntax.
-  const mainTitleFile = `${textFilePrefix}_main.txt`;
-  fs.writeFileSync(path.join(workDir, mainTitleFile), mainTitle.replace(/\r/g, ''), 'utf-8');
+// One pass per clip: trim, cover the video area like the preview's object-cover,
+// pad to 1080x1920 with the background, 30 fps, titles, and AAC 48 kHz stereo
+// (silence when the source has none). Every segment has the same parameters, so
+// the final concat can copy the streams.
+export async function renderClipSegment(options: SegmentOptions): Promise<void> {
+  const { inputPath, outputPath, workDir, textFilePrefix, startTime, endTime, texts, onProgress } = options;
+  const duration = endTime - startTime;
+  const areaHeight = Math.round((OUTPUT_HEIGHT * Math.min(100, Math.max(10, options.videoHeightPercent))) / 200) * 2;
+  const background = toFilterColor(options.background, '000000');
 
-  const cleanMainColor = toFilterColor(mainTitleColor, 'white');
-  const cleanClipColor = toFilterColor(clipTitleColor, cleanMainColor);
-  const fontOption = getFontFileOption();
+  const drawTexts = texts.map((layer, index) => {
+    const file = `${textFilePrefix}_text${index}.txt`;
+    fs.writeFileSync(path.join(workDir, file), layer.text.replace(/\r/g, ''), 'utf-8');
+    return `drawtext=textfile=${file}:expansion=none:x=w*${toFilterFraction(layer.fx, 'fx')}-text_w/2:y=h*${toFilterFraction(layer.fy, 'fy')}-text_h/2` +
+      `:text_align=C:line_spacing=${TITLE_LINE_SPACING}` +
+      `:fontsize=${toFilterNumber(layer.fontSize, 'fontSize')}:fontcolor=${toFilterColor(layer.color, 'FFFFFF')}` +
+      `:borderw=${toFilterNumber(layer.stroke, 'stroke')}:bordercolor=black${getFontFileOption(layer.font)}`;
+  });
 
-  // Build drawtext filter (multiple filters separated by comma)
-  let filterComplex = `drawtext=textfile=${mainTitleFile}:expansion=none:x=${toFilterNumber(mainTitleX, 'mainTitleX')}:y=${toFilterNumber(mainTitleY, 'mainTitleY')}:fontsize=40:fontcolor=${cleanMainColor}:borderw=${toFilterNumber(mainTitleStroke, 'mainTitleStroke')}:bordercolor=black${fontOption}`;
+  const base = [
+    `scale=${OUTPUT_WIDTH}:${areaHeight}:force_original_aspect_ratio=increase:force_divisible_by=2`,
+    `crop=${OUTPUT_WIDTH}:${areaHeight}`,
+    `pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:0:(oh-ih)/2:color=0x${background}`,
+    'setsar=1',
+    `fps=${OUTPUT_FPS}`
+  ].join(',');
+  const audio = `aresample=${OUTPUT_SAMPLE_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,apad`;
 
-  if (clipTitle && clipTitleX !== undefined && clipTitleY !== undefined) {
-    const clipTitleFile = `${textFilePrefix}_clip.txt`;
-    fs.writeFileSync(path.join(workDir, clipTitleFile), clipTitle.replace(/\r/g, ''), 'utf-8');
-    filterComplex += `,drawtext=textfile=${clipTitleFile}:expansion=none:x=${toFilterNumber(clipTitleX, 'clipTitleX')}:y=${toFilterNumber(clipTitleY, 'clipTitleY')}:fontsize=32:fontcolor=${cleanClipColor}:borderw=${toFilterNumber(clipTitleStroke ?? mainTitleStroke, 'clipTitleStroke')}:bordercolor=black${fontOption}`;
+  const withAudio = await hasAudioStream(inputPath);
+  const args = [
+    ...FFMPEG_BASE_ARGS,
+    '-protocol_whitelist', 'file',
+    '-ss', String(startTime), '-t', String(duration), '-i', inputPath
+  ];
+  let nextInput = 1;
+  let video = `[0:v]${[base, 'format=yuv420p', ...drawTexts].join(',')}[v]`;
+  if (options.overlayPath) {
+    // -f png_pipe reads the file as a single PNG, never as an image2 name pattern;
+    // overlay keeps repeating that one frame (eof_action=repeat) for the whole clip
+    args.push('-f', 'png_pipe', '-i', options.overlayPath);
+    video = `[0:v]${base}[base];[${nextInput}:v]format=rgba[layer];` +
+      `[base][layer]overlay=0:0:format=auto,${['format=yuv420p', ...drawTexts].join(',')}[v]`;
+    nextInput++;
   }
-
-  console.log('DEBUG addTextOverlay: inputPath =', inputPath);
-  console.log('DEBUG addTextOverlay: outputPath =', outputPath);
-  console.log('DEBUG addTextOverlay: filterComplex =', filterComplex);
+  let audioInput = '0:a';
+  if (!withAudio) {
+    args.push('-f', 'lavfi', '-t', String(duration), '-i', `anullsrc=channel_layout=stereo:sample_rate=${OUTPUT_SAMPLE_RATE}`);
+    audioInput = `${nextInput}:a`;
+  }
+  args.push(
+    '-filter_complex', `${video};[${audioInput}]${audio}[a]`,
+    '-map', '[v]', '-map', '[a]',
+    '-t', String(duration),
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(OUTPUT_FPS),
+    '-c:a', 'aac', '-b:a', '160k', '-ar', String(OUTPUT_SAMPLE_RATE), '-ac', '2',
+    '-progress', 'pipe:1', '-nostats',
+    '-y', outputPath
+  );
 
   try {
-    await runProcess('ffmpeg', [
-      ...FFMPEG_BASE_ARGS,
-      '-protocol_whitelist', 'file',
-      '-i', inputPath,
-      '-vf', filterComplex,
-      '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-c:a', 'aac',
-      '-y',
-      outputPath
-    ], { cwd: workDir });
+    await runProcess('ffmpeg', args, {
+      cwd: workDir,
+      timeoutMs: SEGMENT_TIMEOUT_MS,
+      onStdout: chunk => {
+        const seconds = parseProgressSeconds(chunk);
+        if (seconds !== null && onProgress && duration > 0) onProgress(Math.min(1, seconds / duration));
+      }
+    });
   } catch (error: any) {
-    throw new Error(`FFmpeg text overlay error: ${error.stderr || error.message}`);
+    throw new Error(`FFmpeg render error: ${error.stderr || error.message}`);
   }
 }
 
@@ -191,6 +228,7 @@ export async function concatenateClips(options: ConcatOptions): Promise<void> {
       '-safe', '0',
       '-i', concatListPath,
       '-c', 'copy',
+      '-movflags', '+faststart',
       '-y',
       outputPath
     ]);
