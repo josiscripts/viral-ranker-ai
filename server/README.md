@@ -97,7 +97,7 @@ Edita `.env` para personalizar:
 | `PORT` | `3001` | Puerto en el que escucha el servidor |
 | `HOST` | `127.0.0.1` | Interfaz en la que escucha (solo local por defecto) |
 | `STORAGE_DIR` | `server/storage` | Carpeta de uploads, temporales y exports |
-| `FONT_FILE` | Arial / DejaVu Sans | Fuente `.ttf`/`.otf` de los títulos del export |
+| `FONT_FILE` | Inter incluida (`assets/fonts`) | Fuente `.ttf`/`.otf` de los títulos del export; si se define, se usa para todos los estilos |
 | `FRONTEND_URL` | `http://localhost:3000` | URL del frontend para CORS |
 | `NODE_ENV` | `development` | Entorno (development/production) |
 

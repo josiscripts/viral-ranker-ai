@@ -15,6 +15,7 @@ export interface TextLayer {
   fontSize: number;
   color: string;
   stroke: number;
+  font?: FontVariant;
 }
 
 interface SegmentOptions {
@@ -67,19 +68,32 @@ const SYSTEM_FONT_CANDIDATES: Record<string, string[]> = {
   ]
 };
 
-// FONT_FILE (env) wins over the system defaults. Paths are escaped for the filter
-// graph; paths containing quotes are rejected instead of escaped twice.
-const getFontFileOption = (): string => {
+// Inter (OFL), the preview's font, ships in server/assets/fonts. Same relative
+// path from src/services and from dist/services.
+export type FontVariant = 'bold' | 'boldItalic' | 'medium';
+const BUNDLED_FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
+const BUNDLED_FONT_FILES: Record<FontVariant, string> = {
+  bold: 'Inter-Bold.ttf',
+  boldItalic: 'Inter-BoldItalic.ttf',
+  medium: 'Inter-Medium.ttf'
+};
+
+// FONT_FILE (env) wins for every variant, then the bundled Inter, then system fonts.
+// Paths containing quotes are skipped instead of escaped twice in the filter graph.
+export const resolveFontFile = (variant: FontVariant = 'bold'): string => {
   const candidates = process.env.FONT_FILE
     ? [process.env.FONT_FILE]
-    : SYSTEM_FONT_CANDIDATES[process.platform] || [];
+    : [path.join(BUNDLED_FONTS_DIR, BUNDLED_FONT_FILES[variant]), ...(SYSTEM_FONT_CANDIDATES[process.platform] || [])];
   const fontFile = candidates.find(candidate => !candidate.includes("'") && fs.existsSync(candidate));
 
   if (!fontFile) {
     throw new Error('No font file available for video titles. Set FONT_FILE in server/.env to a .ttf/.otf file');
   }
+  return fontFile;
+};
 
-  const escaped = fontFile.replace(/\\/g, '/').replace(/:/g, '\\:');
+const getFontFileOption = (variant: FontVariant = 'bold'): string => {
+  const escaped = resolveFontFile(variant).replace(/\\/g, '/').replace(/:/g, '\\:');
   return `:fontfile='${escaped}'`;
 };
 
@@ -106,14 +120,13 @@ export async function renderClipSegment(options: SegmentOptions): Promise<void> 
   const duration = endTime - startTime;
   const areaHeight = Math.round((OUTPUT_HEIGHT * Math.min(100, Math.max(10, options.videoHeightPercent))) / 200) * 2;
   const background = toFilterColor(options.background, '000000');
-  const fontOption = getFontFileOption();
 
   const drawTexts = texts.map((layer, index) => {
     const file = `${textFilePrefix}_text${index}.txt`;
     fs.writeFileSync(path.join(workDir, file), layer.text.replace(/\r/g, ''), 'utf-8');
     return `drawtext=textfile=${file}:expansion=none:x=${toFilterNumber(layer.x, 'x')}:y=${toFilterNumber(layer.y, 'y')}` +
       `:fontsize=${toFilterNumber(layer.fontSize, 'fontSize')}:fontcolor=${toFilterColor(layer.color, 'FFFFFF')}` +
-      `:borderw=${toFilterNumber(layer.stroke, 'stroke')}:bordercolor=black${fontOption}`;
+      `:borderw=${toFilterNumber(layer.stroke, 'stroke')}:bordercolor=black${getFontFileOption(layer.font)}`;
   });
 
   const video = [
