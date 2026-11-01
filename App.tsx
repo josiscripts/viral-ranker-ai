@@ -54,8 +54,18 @@ import {
   X,
   Type as TypeIconComponent
 } from 'lucide-react';
-import { Clip, Project, UserProfile, ExportErrorInfo, ExportStep, ExportValidationIssue } from './types';
+import { Clip, Project, UserProfile, ExportErrorInfo, ExportStep, ExportValidationIssue, ExportRequest } from './types';
 import { generateRankingScript } from './services/geminiService';
+import {
+  ApiNetworkError,
+  ApiResponseError,
+  apiUrl,
+  resolveMediaUrl,
+  downloadVideoFromUrl,
+  uploadVideoFile,
+  createExportJob,
+  getExportJobStatus
+} from './services/apiClient';
 import ProfileView from './ProfileView';
 import { translations } from './translations';
 import TrimTimeline from './TrimTimeline';
@@ -159,9 +169,6 @@ const INITIAL_PROJECTS: Project[] = [
   }
 ];
 
-// Header required by the backend on every POST (forces a CORS preflight)
-const APP_REQUEST_HEADERS = { 'X-Requested-With': 'viral-ranker' };
-
 // Clips created before assetId existed only store the served URL (/api/files/<name>)
 const getClipAssetId = (clip: Clip): string | undefined => {
   if (clip.assetId) return clip.assetId;
@@ -173,6 +180,21 @@ const getClipAssetId = (clip: Clip): string | undefined => {
     return undefined;
   }
 };
+
+// Projects saved before P1-07 stored absolute backend URLs
+// (http://localhost:3001/api/files/<name>). Keep only the relative path and the
+// asset id, so the project works whatever address the backend has.
+const LEGACY_MEDIA_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1):3001(\/api\/files\/[^?#]+)$/;
+
+const migrateLegacyClip = (clip: Clip): Clip => {
+  const match = typeof clip.url === 'string' ? clip.url.match(LEGACY_MEDIA_URL) : null;
+  if (!match) return clip;
+  const migrated = { ...clip, url: match[1] };
+  return { ...migrated, assetId: clip.assetId || getClipAssetId(migrated) };
+};
+
+const migrateLegacyProjects = (projects: Project[]): Project[] =>
+  projects.map(project => Array.isArray(project.clips) ? { ...project, clips: project.clips.map(migrateLegacyClip) } : project);
 
 // Clips the server would reject, checked before anything is sent
 const getExportIssues = (clips: Clip[]): ExportValidationIssue[] =>
@@ -218,7 +240,7 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(saved);
         // An empty list would leave the editor without an active project
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return migrateLegacyProjects(parsed);
       } catch (e) {
         console.error('Failed to parse projects from localStorage', e);
       }
@@ -397,45 +419,14 @@ const App: React.FC = () => {
       }
 
       console.log(`[DOWNLOAD] Iniciando descarga de ${url}`);
+      const { videoUrl, duration, platform, filename } = await downloadVideoFromUrl(url.trim());
 
-      const response = await fetch('http://localhost:3001/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
-        body: JSON.stringify({ url: url.trim() })
-      });
-
-      console.log(`[DOWNLOAD] Response status: ${response.status}`);
-
-      const responseText = await response.text();
-      console.log(`[DOWNLOAD] Response body (raw):`, responseText);
-
-      if (!response.ok) {
-        try {
-          const error = JSON.parse(responseText);
-          console.log(`[DOWNLOAD] Error JSON parsed:`, error);
-          throw new Error(error.error || `HTTP ${response.status}: Download failed`);
-        } catch (parseErr) {
-          console.error(`[DOWNLOAD] Failed to parse error response:`, parseErr);
-          throw new Error(`HTTP ${response.status}: ${responseText || 'Unknown error'}`);
-        }
-      }
-
-      try {
-        const data = JSON.parse(responseText);
-        console.log(`[DOWNLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration, platform, filename } = data;
-
-        const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
-        const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
-        );
-        updateCurrentProject({ clips: updatedClips });
-        setDownloadErrors({ ...downloadErrors, [clipId]: '' });
-        console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${absoluteVideoUrl}`);
-      } catch (parseErr) {
-        console.error(`[DOWNLOAD] Failed to parse success response:`, parseErr);
-        throw new Error('Invalid response from server');
-      }
+      const updatedClips = project.clips.map(c =>
+        c.id === clipId ? { ...c, url: videoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
+      );
+      updateCurrentProject({ clips: updatedClips });
+      setDownloadErrors({ ...downloadErrors, [clipId]: '' });
+      console.log(`[DOWNLOAD] Clip ${clipId} actualizado exitosamente desde ${platform}. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Download failed';
       setDownloadErrors({ ...downloadErrors, [clipId]: errorMsg });
@@ -454,60 +445,19 @@ const App: React.FC = () => {
         throw new Error('Only .mp4 files are allowed');
       }
 
-      const formData = new FormData();
-      formData.append('video', file);
+      console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`);
+      const { videoUrl, duration, filename } = await uploadVideoFile(file);
 
-      console.log(`[UPLOAD] Iniciando upload de ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB) a http://localhost:3001/api/upload`);
-
-      const response = await fetch('http://localhost:3001/api/upload', {
-        method: 'POST',
-        headers: APP_REQUEST_HEADERS,
-        body: formData
-      });
-
-      console.log(`[UPLOAD] Response status: ${response.status}`);
-      console.log(`[UPLOAD] Response headers:`, {
-        contentType: response.headers.get('content-type'),
-        contentLength: response.headers.get('content-length')
-      });
-
-      // Read response as text first to see what we actually got
-      const responseText = await response.text();
-      console.log(`[UPLOAD] Response body (raw):`, responseText);
-
-      if (!response.ok) {
-        try {
-          const error = JSON.parse(responseText);
-          console.log(`[UPLOAD] Error JSON parsed:`, error);
-          throw new Error(error.error || `HTTP ${response.status}: Upload failed`);
-        } catch (parseErr) {
-          console.error(`[UPLOAD] Failed to parse error response:`, parseErr);
-          throw new Error(`HTTP ${response.status}: ${responseText || 'Unknown error'}`);
-        }
-      }
-
-      // Parse success response
-      try {
-        const data = JSON.parse(responseText);
-        console.log(`[UPLOAD] Success JSON parsed:`, data);
-        const { videoUrl, duration, filename } = data;
-
-        const absoluteVideoUrl = videoUrl.startsWith('http') ? videoUrl : `http://localhost:3001${videoUrl}`;
-        const updatedClips = project.clips.map(c =>
-          c.id === clipId ? { ...c, url: absoluteVideoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
-        );
-        updateCurrentProject({ clips: updatedClips });
-        setUploadErrors({ ...uploadErrors, [clipId]: '' });
-        console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${absoluteVideoUrl}`);
-      } catch (parseErr) {
-        console.error(`[UPLOAD] Failed to parse success response:`, parseErr);
-        throw new Error('Invalid response from server');
-      }
+      const updatedClips = project.clips.map(c =>
+        c.id === clipId ? { ...c, url: videoUrl, assetId: filename, duration, endTime: Math.min(duration, 5) } : c
+      );
+      updateCurrentProject({ clips: updatedClips });
+      setUploadErrors({ ...uploadErrors, [clipId]: '' });
+      console.log(`[UPLOAD] Clip actualizado exitosamente. URL: ${videoUrl}`);
     } catch (err) {
       const errorMsg = (err instanceof Error && err.message) || 'Upload failed';
       setUploadErrors({ ...uploadErrors, [clipId]: errorMsg });
       console.error(`[UPLOAD] Upload error for clip ${clipId}:`, errorMsg);
-      console.error(`[UPLOAD] Full error object:`, err);
     } finally {
       setUploadingClipId(null);
     }
@@ -569,19 +519,9 @@ const App: React.FC = () => {
     setExportProgress(0);
     setExportStep({ key: 'queued' });
 
-    const readServerError = async (response: Response) => {
-      try {
-        const data = await response.json();
-        if (typeof data.error === 'string') return data.error;
-      } catch (e) {
-        // Body is not JSON
-      }
-      return `HTTP ${response.status}`;
-    };
-
     try {
       // Prepare export request with all project data
-      const exportRequest = {
+      const exportRequest: ExportRequest = {
         projectId: project.id,
         title: project.title,
         titlePosition: project.titlePosition,
@@ -614,22 +554,8 @@ const App: React.FC = () => {
         }))
       });
 
-      // Step 1: Create export job (fetch only rejects when the server is unreachable)
-      let createResponse: Response;
-      try {
-        createResponse = await fetch('http://localhost:3001/api/export', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...APP_REQUEST_HEADERS },
-          body: JSON.stringify(exportRequest)
-        });
-      } catch (e) {
-        throw new ExportFailure({ kind: 'network' });
-      }
-      if (!createResponse.ok) {
-        throw new ExportFailure({ kind: 'server', message: await readServerError(createResponse) });
-      }
-
-      const { jobId } = await createResponse.json();
+      // Step 1: Create export job
+      const { jobId } = await createExportJob(exportRequest);
       setExportJobId(jobId);
 
       // Step 2: Poll for job status every 500ms (max 600 attempts = 5 minutes)
@@ -638,31 +564,24 @@ const App: React.FC = () => {
         if (poll >= MAX_POLLS) throw new ExportFailure({ kind: 'timeout' });
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        let statusResponse: Response;
+        let status;
         try {
-          statusResponse = await fetch(`http://localhost:3001/api/export/${jobId}`, {
-            signal: AbortSignal.timeout(5000)
-          });
+          status = await getExportJobStatus(jobId, 5000);
         } catch (e) {
           // A slow status response is retried on the next poll
           if (e instanceof DOMException && e.name === 'TimeoutError') continue;
-          throw new ExportFailure({ kind: 'network' });
+          throw e;
         }
-        if (!statusResponse.ok) {
-          throw new ExportFailure({ kind: 'server', message: await readServerError(statusResponse) });
-        }
-
-        const status = await statusResponse.json();
         setExportProgress(status.progress);
         if (status.step) setExportStep(status.step);
 
         if (status.status === 'error') {
           throw new ExportFailure({ kind: 'server', message: status.error || undefined });
         }
-        if (status.status === 'completed') {
+        if (status.status === 'completed' && status.downloadUrl) {
           // Download the file
           const link = document.createElement('a');
-          link.href = `http://localhost:3001${status.downloadUrl}`;
+          link.href = apiUrl(status.downloadUrl);
           link.download = `${project.title.replace(/\n/g, '_').toLowerCase()}_export.mp4`;
           document.body.appendChild(link);
           link.click();
@@ -680,9 +599,10 @@ const App: React.FC = () => {
       }, 1500);
 
     } catch (error) {
-      setExportError(error instanceof ExportFailure
-        ? error.info
-        : { kind: 'server', message: error instanceof Error ? error.message : undefined });
+      if (error instanceof ExportFailure) setExportError(error.info);
+      else if (error instanceof ApiNetworkError) setExportError({ kind: 'network' });
+      else if (error instanceof ApiResponseError) setExportError({ kind: 'server', message: error.message });
+      else setExportError({ kind: 'server', message: error instanceof Error ? error.message : undefined });
       setIsExporting(false);
       setExportProgress(0);
       setExportStep(null);
@@ -1037,7 +957,7 @@ const App: React.FC = () => {
                   )}
 
                   <div className={`aspect-video rounded-2xl mb-6 overflow-hidden relative flex items-center justify-center ${isDarkMode ? 'bg-black' : 'bg-gray-100'}`}>
-                    {p.clips[0]?.url ? <video src={p.clips[0].url} className="w-full h-full object-cover opacity-60" /> : <Film size={40} className={isDarkMode ? 'text-white/5' : 'text-gray-200'} />}
+                    {p.clips[0]?.url ? <video src={resolveMediaUrl(p.clips[0].url)} className="w-full h-full object-cover opacity-60" /> : <Film size={40} className={isDarkMode ? 'text-white/5' : 'text-gray-200'} />}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-6">
                       <span className="text-white text-xs font-black uppercase tracking-widest flex items-center gap-2"><Play size={12} fill="white"/> {lang === 'es' ? 'Continuar Editando' : 'Continue Editing'}</span>
                     </div>
@@ -1316,7 +1236,7 @@ const App: React.FC = () => {
                   )}
                 </div>
                 <div className="w-full overflow-hidden flex items-center justify-center transition-all duration-300 relative z-40 shadow-2xl" style={{ height: `${project.videoHeight}%` }}>
-                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={activeClip.url} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
+                  {activeClip?.url ? <div className="w-full h-full relative"><video ref={videoRef} key={activeClip.url} src={resolveMediaUrl(activeClip.url)} autoPlay loop playsInline className="w-full h-full object-cover" onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /><div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30"></div></div> : <div className="w-full h-full flex items-center justify-center bg-[#111]"><Film size={48} className="text-gray-900 animate-pulse" /></div>}
                 </div>
                 {(() => {
                   const layoutConfig = getClipLayoutConfig(project.clips.length);
@@ -1414,7 +1334,7 @@ const ClipCard: React.FC<{ clip: Clip, index: number, active: boolean, onClick: 
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={clip.url} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4 space-y-2" onClick={e => e.stopPropagation()}>
+        <div className={`border rounded-[24px] flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden group/thumb shadow-inner transition-colors ${isDarkMode ? 'bg-black/60 border-white/5' : 'bg-gray-100 border-gray-200'}`}>{isProcessing ? <Loader2 className="text-blue-500 animate-spin" size={28} /> : clip.url ? <video src={resolveMediaUrl(clip.url)} className="w-full h-full object-cover opacity-60 group-hover/thumb:opacity-100 transition-opacity" /> : <Film className={isDarkMode ? 'text-gray-800' : 'text-gray-400'} size={32} />}<div className="absolute bottom-4 inset-x-4 space-y-2" onClick={e => e.stopPropagation()}>
             <div className="flex gap-2"><button onClick={() => setSourceTab('url')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'url' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Enlace' : 'URL'}</button><button onClick={() => setSourceTab('upload')} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-colors ${sourceTab === 'upload' ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white') : (isDarkMode ? 'bg-white/5 text-gray-400 hover:bg-white/10' : 'bg-gray-200 text-gray-700')}`}>{lang === 'es' ? 'Archivo' : 'File'}</button></div>
             {sourceTab === 'url' ? (
               <div className={`flex items-center gap-3 backdrop-blur-xl border rounded-2xl px-5 py-3 shadow-2xl transition-colors ${isDarkMode ? 'bg-[#111]/90 border-white/10' : 'bg-white/90 border-gray-200 shadow-lg'}`}>{isDownloading ? <Loader2 size={14} className="animate-spin text-blue-500" /> : <LinkIcon size={14} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} />}<input type="text" placeholder={lang === 'es' ? "Pegar enlace viral..." : "Paste viral link..."} value={clip.url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const newUrl = e.target.value; onUpdate(clip.id, { url: newUrl }); const trimmedUrl = newUrl.trim(); if (!isDownloading && trimmedUrl && (trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://')) && onDownloadUrl) { onDownloadUrl(clip.id, trimmedUrl); } }} className={`bg-transparent border-none text-[11px] w-full focus:ring-0 font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`} disabled={isDownloading} /></div>

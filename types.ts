@@ -86,3 +86,40 @@ export interface ExportErrorInfo {
   issues?: ExportValidationIssue[];
   message?: string;
 }
+
+// Response of POST /api/upload and POST /api/download
+export interface VideoAssetResponse {
+  videoUrl: string; // relative, e.g. /api/files/<filename>
+  filename: string;
+  duration: number;
+  platform?: string;
+}
+
+// Body of POST /api/export
+export interface ExportRequest {
+  projectId: string;
+  title: string;
+  titlePosition: { x: number; y: number };
+  titleStroke: number;
+  clips: {
+    id: string;
+    assetId?: string;
+    startTime: number;
+    endTime: number;
+    rank: number;
+    title: string;
+    titleStyle: { color: string };
+    clipTitlePosition?: { x: number; y: number };
+  }[];
+}
+
+// Response of GET /api/export/:jobId
+export interface ExportJobStatus {
+  jobId: string;
+  status: 'queued' | 'processing' | 'completed' | 'error';
+  progress: number;
+  currentStep: string;
+  step?: ExportStep;
+  error?: string;
+  downloadUrl?: string;
+}

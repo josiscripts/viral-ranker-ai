@@ -332,7 +332,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 |---|---|---|
 | B | Tipado del frontend (`@types/react`) | ✅ |
 | 1 | P1-01 Mostrar errores de exportación | ✅ |
-| 2 | P1-07 Cliente API, proxy de Vite y build del servidor | 🔲 |
+| 2 | P1-07 Cliente API, proxy de Vite y build del servidor | ✅ |
 | 3 | P1-05 Entrada de URL robusta | 🔲 |
 | 4 | P1-06 Descargas de mejor calidad | 🔲 |
 | 5 | P1-08 Clip activo y operaciones asíncronas | 🔲 |
@@ -381,6 +381,26 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
   - servidor caído: mensaje visible, y "Reintentar" exporta y descarga;
   - export correcto: muestra "Processing clip N of 2" y descarga.
   También hay capturas del banner en tema claro y oscuro. `npm test` del servidor da 8/8 y `tsc` (frontend `--strict` y servidor) da 0 errores.
+
+**P1-07 — Configuración por entorno y build del servidor** ✅
+- **Error original (E-08, E-14, E-15):**
+  - 8 URLs `http://localhost:3001` fijas en `App.tsx`, con el fetch inline en el componente;
+  - los proyectos guardaban la URL absoluta del backend;
+  - `server/dist` era un build viejo de julio, sin la ruta de export ni las correcciones de P0, y `npm start` lo servía sin recompilar;
+  - los errores de upload/descarga mostraban el JSON crudo (`HTTP 400: {"error":...}`), porque el `catch` interno reemplazaba el mensaje.
+- **Solución:**
+  - Nuevo `services/apiClient.ts`, la única capa hacia el backend. Usa `/api` del mismo origen y `VITE_API_URL` opcional, añade la cabecera de la app en los POST y lanza `ApiNetworkError`/`ApiResponseError` con el mensaje del servidor.
+  - Proxy de Vite `/api` → `API_PROXY_TARGET` (por defecto `127.0.0.1:3001`).
+  - Los clips guardan `/api/files/<nombre>` y se resuelven con `resolveMediaUrl`. Los proyectos guardados con URL absoluta se migran al cargar, añadiendo `assetId`.
+  - `prestart: npm run build` en el servidor; se borró el `server/dist` viejo, que es generado e ignorado.
+  - `vite-env.d.ts` tipa `import.meta.env` y `.env.example` documenta las variables.
+- **Archivos:** `services/apiClient.ts` (nuevo), `App.tsx`, `types.ts` (`VideoAssetResponse`, `ExportRequest`, `ExportJobStatus`), `vite.config.ts`, `vite-env.d.ts` (nuevo), `.env.example` (nuevo), `server/package.json`, `tests/e2e/api-client.test.mjs` (nuevo).
+- **Pruebas:**
+  - `grep localhost:3001` en el código del frontend solo encuentra el comentario y la regex de migración; en el bundle de producción, 0 coincidencias.
+  - `npm start` en `server/` recompila `dist` y `POST /api/export` responde 400 de validación.
+  - `npm run test:e2e` da 7/7. Lo nuevo: un proyecto antiguo con URL absoluta se migra y su vídeo carga por el proxy (200/206); upload desde la UI y export van solo a `localhost:3000/api/...`, con 0 peticiones a `:3001`.
+  - `npm test` del servidor da 8/8 y `tsc --strict` da 0 errores.
+- **Pendiente detectado:** E-37 sigue abierto. El archivo exportado se descarga como `<jobId>.mp4` porque `Content-Disposition` del servidor manda sobre el atributo `download`. No forma parte de P1-07.
 
 ---
 

@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         // Fail instead of silently moving to another port: the backend only allows CORS from :3000
         strictPort: true,
+        // The app calls the backend same-origin (/api/...); in development Vite forwards it
+        proxy: {
+          '/api': { target: env.API_PROXY_TARGET || 'http://127.0.0.1:3001' },
+        },
       },
       plugins: [react()],
       define: {
