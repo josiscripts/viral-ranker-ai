@@ -334,7 +334,7 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
 | 1 | P1-01 Mostrar errores de exportación | ✅ |
 | 2 | P1-07 Cliente API, proxy de Vite y build del servidor | ✅ |
 | 3 | P1-05 Entrada de URL robusta | ✅ |
-| 4 | P1-06 Descargas de mejor calidad | 🔲 |
+| 4 | P1-06 Descargas de mejor calidad | ✅ |
 | 5 | P1-08 Clip activo y operaciones asíncronas | 🔲 |
 | 6 | P1-09 Rangos coherentes y reordenación | 🔲 |
 | 7 | P1-10 Preview fiel al trim | 🔲 |
@@ -415,6 +415,29 @@ Cuando el usuario pega un link de video corto, el sistema lo descarga automátic
     - pegar descarga una vez;
     - el botón descarga.
   - `npm run test:e2e` da 10/10 y `tsc --strict` da 0 errores. También hay capturas del campo en tema claro y oscuro.
+
+**P1-06 — Descargas asíncronas y de mejor calidad** ✅
+- **Error original:**
+  - El formato `best[ext=mp4]` solo acepta archivos progresivos (360p como máximo en YouTube). Con el yt-dlp actual, YouTube no los ofrece sin el solver de JS, así que **la descarga de YouTube fallaba** (400 con el mensaje truncado de un WARNING).
+  - Cualquier extractor de yt-dlp podía procesar la URL (S-08).
+  - El error mostrado eran los primeros 100 caracteres de stderr, es decir, avisos y no el error.
+  - Los archivos parciales quedaban en `uploads/`.
+  - Que la descarga fuera asíncrona ya se había resuelto en P0 (`runProcess`).
+- **Solución:**
+  - Formato `bv*[ext=mp4][vcodec^=avc1][height<=1920][width<=1920]+ba[ext=m4a]`, con alternativas sin H.264 y de archivo único, y `--merge-output-format mp4`. El tope de 1920 px por lado evita bajar 1440p/4K que el export (1080×1920) no usa y que superaría el límite de 300 MB.
+  - `--use-extractors` limitado al extractor de la plataforma detectada.
+  - El error se toma de las líneas `ERROR:`, y hay un mensaje específico si falta el solver de YouTube.
+  - Los archivos parciales (`.part`, `.fNNN`) se borran si la descarga falla.
+- **Archivos:** `server/src/services/downloadService.ts`, `server/tests/downloadService.test.ts` (nuevo), `server/README.md` (runtime JS de yt-dlp, tests, variables).
+- **Pruebas:**
+  - **Descargas reales a través del servidor de prueba (almacenamiento temporal):**
+    - YouTube "Me at the zoo" da 200: H.264 + AAC unidos (240p, la resolución máxima de ese vídeo).
+    - `/api/health` responde en 3–5 ms durante la descarga (criterio < 100 ms).
+    - Un vídeo inexistente da 400 con "This video is unavailable" y no deja archivos.
+  - **Criterio ≥ 720p:** en un vídeo HD público (Big Buck Bunny, Blender Foundation), yt-dlp con el mismo selector elige `299+140` (1920×1080, H.264, unos 268 MB). Se descargaron solo los primeros 5 s con `--download-sections`, y `ffprobe` da 1920×1080 H.264 + AAC. El vídeo completo (10 min) no se bajó.
+  - `npm test` da 12/12 (4 unitarios nuevos: hosts, look-alikes y extracción de errores).
+- **No verificado:** TikTok e Instagram (no se probó con enlaces reales).
+- **Pendiente de decisión:** `yt-dlp-ejs` (scripts del solver; `deno` ya está instalado). Sin él, yt-dlp avisa `n challenge solving failed` y algunos formatos o vídeos de YouTube pueden faltar. Es una dependencia nueva de Python, no autorizada explícitamente.
 
 ---
 

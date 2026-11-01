@@ -8,6 +8,16 @@ const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_DOWNLOAD_SIZE = '300M';
 const MAX_VIDEO_DURATION_SECONDS = 900; // 15 minutes
 
+// Best MP4 video that fits 1920x1920 (1080p landscape or 1080x1920 portrait; the
+// export is 1080x1920, so more is wasted), preferring H.264 for compatibility,
+// merged with the best m4a audio; falls back to the best single MP4 file
+const DOWNLOAD_FORMAT = [
+  'bv*[ext=mp4][vcodec^=avc1][height<=1920][width<=1920]+ba[ext=m4a]',
+  'bv*[ext=mp4][height<=1920][width<=1920]+ba[ext=m4a]',
+  'b[ext=mp4][height<=1920][width<=1920]',
+  'b[ext=mp4]'
+].join('/');
+
 export type Platform = 'youtube' | 'tiktok' | 'instagram' | 'unknown';
 
 export interface DownloadResponse {
@@ -23,6 +33,33 @@ const PLATFORM_HOSTS: Record<Exclude<Platform, 'unknown'>, string[]> = {
   youtube: ['youtube.com', 'youtu.be'],
   tiktok: ['tiktok.com'],
   instagram: ['instagram.com', 'instagr.am']
+};
+
+// yt-dlp only runs the extractor of the detected platform (never the generic one)
+const PLATFORM_EXTRACTORS: Record<Exclude<Platform, 'unknown'>, string> = {
+  youtube: 'youtube',
+  tiktok: 'tiktok',
+  instagram: 'instagram'
+};
+
+// yt-dlp prints warnings before the actual error: report the ERROR lines
+export const getYtDlpErrorMessage = (output: string): string => {
+  const errorLines = output
+    .split(/\r?\n/)
+    .filter(line => line.startsWith('ERROR:'))
+    .map(line => line.replace(/^ERROR:\s*/, ''));
+  return (errorLines.join(' ') || output.trim()).substring(0, 200);
+};
+
+// Removes the final file and yt-dlp's partial/intermediate files (.part, .fNNN.mp4, .temp.mp4)
+const removeDownloadFiles = (baseName: string): void => {
+  try {
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      if (name.startsWith(baseName)) fs.rmSync(path.join(UPLOAD_DIR, name), { force: true });
+    }
+  } catch (error) {
+    console.error('Failed to clean up partial download:', error);
+  }
 };
 
 const hostMatches = (hostname: string, allowedHost: string): boolean =>
@@ -63,25 +100,33 @@ export const downloadVideo = async (url: string): Promise<{ success: boolean; da
       fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     }
 
-    const timestamp = Date.now();
-    const filename = `${timestamp}_${platform}.mp4`;
+    const baseName = `${Date.now()}_${platform}`;
+    const filename = `${baseName}.mp4`;
     const filePath = path.join(UPLOAD_DIR, filename);
 
     // Download video using yt-dlp. Arguments are passed without a shell, and "--"
     // guarantees the URL is never parsed as an option.
     try {
       await runProcess('yt-dlp', [
-        '-f', 'best[ext=mp4]',
+        '-f', DOWNLOAD_FORMAT,
+        '--merge-output-format', 'mp4',
+        '--use-extractors', PLATFORM_EXTRACTORS[platform],
         '--no-playlist',
         '--max-filesize', MAX_DOWNLOAD_SIZE,
         '--match-filter', `duration <=? ${MAX_VIDEO_DURATION_SECONDS}`,
         '-o', filePath,
         '--', normalizedUrl
       ], { timeoutMs: DOWNLOAD_TIMEOUT_MS });
-    } catch (downloadError: any) {
+    } catch (downloadError) {
+      removeDownloadFiles(baseName);
       const errorOutput = downloadError instanceof ProcessError
         ? `${downloadError.stderr}\n${downloadError.stdout}`
-        : String(downloadError?.message || downloadError);
+        : String(downloadError instanceof Error ? downloadError.message : downloadError);
+
+      // Without a JavaScript challenge solver YouTube hides most formats
+      if (platform === 'youtube' && errorOutput.includes('challenge solving failed')) {
+        return { success: false, error: 'YouTube download needs a JavaScript challenge solver for yt-dlp (see server/README.md)' };
+      }
 
       // Detect specific error types
       if (errorOutput.includes('private') || errorOutput.includes('restricted')) {
@@ -97,7 +142,7 @@ export const downloadVideo = async (url: string): Promise<{ success: boolean; da
         return { success: false, error: 'Access denied. Video may be region-restricted' };
       }
 
-      return { success: false, error: `Download failed: ${errorOutput.trim().substring(0, 100)}` };
+      return { success: false, error: `Download failed: ${getYtDlpErrorMessage(errorOutput)}` };
     }
 
     // yt-dlp exits successfully but writes nothing when a size/duration filter skips the video
@@ -126,8 +171,8 @@ export const downloadVideo = async (url: string): Promise<{ success: boolean; da
         platform
       }
     };
-  } catch (error: any) {
+  } catch (error) {
     console.error('Download error:', error);
-    return { success: false, error: error.message || 'Unexpected error during download' };
+    return { success: false, error: (error instanceof Error && error.message) || 'Unexpected error during download' };
   }
 };
